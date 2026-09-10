@@ -25,9 +25,17 @@ data class AgentGpuUsageInfo(
     var gpuTemperature: Float = 0f
 )
 
-// GET /gpu_task_info?gpuIndex=N —— taskList 元素（仅取需要的字段）
+/**
+ * GET /gpu_task_info?gpuIndex=N —— taskList 元素。
+ *
+ * 字段顺序与 agent 实际返回的 JSON 对齐（实测共 36 个字段）。
+ * 注意：解析侧配置了 FAIL_ON_UNKNOWN_PROPERTIES=false，**未在此声明字段会被静默丢弃**，
+ * 所以 agent 返回的字段必须在这里逐个声明，否则下游拿不到。
+ */
 data class AgentGpuTaskItem(
-    var id: Long = 0,
+    // 任务 ID。agent 实际返回的是**字符串**（形如 "20260902044750"），
+    // 这里按原样用 String 接收，避免 Jackson 强转失败导致整个 taskList 解析中断。
+    var id: String = "",
     var pid: Int = 0,
     var name: String = "",
     var debugMode: Boolean = false,
@@ -38,17 +46,32 @@ data class AgentGpuTaskItem(
     var startTimestamp: Long = 0,
     var gpuMemoryUsage: Float = 0f,
     var gpuMemoryUsageMax: Float = 0f,
+    var multiprocessingSpawn: Boolean = false,
     var worldSize: Int = 0,
     var localRank: Int = 0,
+    /** 主进程 PID。**agent 用 -1 表示"无法判定"**，不是 0 也不是缺失，消费方需按 >0 判断。 */
     var topPythonPid: Int = 0,
     var condaEnv: String = "",
     var screenSessionName: String = "",
+    var pythonBinPath: String = "",
     var pythonVersion: String = "",
+    var torchVersion: String = "",
+    var torchCudaVersion: String = "",
     var command: String = "",
     var taskMainMemoryMB: Long = 0,
+    var cudaRoot: String = "",
     var cudaVersion: String = "",
+    var cudaVisibleDevices: String = "",
+    var driverVersion: String = "",
+    var userEnvEpoch: String = "",
     var cpuPercent: Float = 0f,
-    var gpuUtilization: Float = 0f
+    var gpuUtilization: Float = 0f,
+    var zeroTotalGpuAlertCount: Int = 0,
+    var zeroTotalCpuAlertCount: Int = 0,
+    var zeroAlreadyAlertedGpuUsage: Boolean = false,
+    var zeroAlreadyAlertedCpuUsage: Boolean = false,
+    var zeroMaxConsecutiveCount: Int = 0,
+    var zeroDetectionIntervalSeconds: Int = 0
 )
 
 // GET /gpu_task_info?gpuIndex=N

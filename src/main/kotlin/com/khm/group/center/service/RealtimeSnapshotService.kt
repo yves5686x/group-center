@@ -271,6 +271,30 @@ class RealtimeSnapshotService {
         b.command = item.command
         b.cpuPercent = item.cpuPercent
         b.gpuUtilization = item.gpuUtilization
+
+        // 补齐字段：agent 侧 id 是字符串，转数字对外；非数字/缺失时退化为 0
+        // （前端据此把订阅入口置灰，而不是把 0 当成合法 projectId 传出去）。
+        b.id = item.id.trim().toLongOrNull() ?: 0L
+        b.debugMode = item.debugMode
+        b.projectDirectory = item.projectDirectory
+        b.multiprocessingSpawn = item.multiprocessingSpawn
+        b.topPythonPid = item.topPythonPid
+        b.pythonBinPath = item.pythonBinPath
+        b.pythonVersion = item.pythonVersion
+        b.torchVersion = item.torchVersion
+        b.torchCudaVersion = item.torchCudaVersion
+        b.taskMainMemoryMB = item.taskMainMemoryMB
+        b.cudaRoot = item.cudaRoot
+        b.cudaVersion = item.cudaVersion
+        b.cudaVisibleDevices = item.cudaVisibleDevices
+        b.driverVersion = item.driverVersion
+        b.userEnvEpoch = item.userEnvEpoch
+        b.zeroTotalGpuAlertCount = item.zeroTotalGpuAlertCount
+        b.zeroTotalCpuAlertCount = item.zeroTotalCpuAlertCount
+        b.zeroAlreadyAlertedGpuUsage = item.zeroAlreadyAlertedGpuUsage
+        b.zeroAlreadyAlertedCpuUsage = item.zeroAlreadyAlertedCpuUsage
+        b.zeroMaxConsecutiveCount = item.zeroMaxConsecutiveCount
+        b.zeroDetectionIntervalSeconds = item.zeroDetectionIntervalSeconds
         return b
     }
 

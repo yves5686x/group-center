@@ -8,6 +8,14 @@ package com.khm.group.center.datatype.realtime
 
 /**
  * 单个 GPU 任务的精简信息（来自 agent /gpu_task_info）
+ *
+ * 字段分两段：
+ *  1. 前 15 个 —— 聚合层初版即透出，前端为必填；
+ *  2. 后 21 个 —— 补齐的遗留字段，前端声明为可选 + VShow 保护，
+ *     透出即自动亮起（详见 group-center-dashboard 的 `Doc/dev/实时数据同源聚合层迁移.md`）。
+ *
+ * 说明：agent 另外返回一个 `mainName`，但前端全仓零引用（与 cpuModel/osName/uptime 同属历史死字段），
+ * 故**刻意不透出**。
  */
 class GpuTaskBrief {
     var pid: Int = 0
@@ -25,6 +33,40 @@ class GpuTaskBrief {
     var command: String = ""
     var cpuPercent: Float = 0f
     var gpuUtilization: Float = 0f
+
+    // ↓↓↓ 补齐字段：来源 agent，此前因未声明 / 未映射而被丢弃 ↓↓↓
+
+    /**
+     * 任务 ID，项目订阅功能依赖它。
+     * agent 侧是字符串，这里转成数字对外；解析失败/缺失时为 0，消费方按 >0 判断。
+     */
+    var id: Long = 0
+
+    var debugMode: Boolean = false
+    var projectDirectory: String = ""
+    var multiprocessingSpawn: Boolean = false
+
+    /** 多卡任务主进程 PID，用于给同一 DDP 任务配色。**agent 用 -1 表示"无法判定"**，消费方须按 >0 判断。 */
+    var topPythonPid: Int = 0
+
+    var pythonBinPath: String = ""
+    var pythonVersion: String = ""
+    var torchVersion: String = ""
+    var torchCudaVersion: String = ""
+    var taskMainMemoryMB: Long = 0
+    var cudaRoot: String = ""
+    var cudaVersion: String = ""
+    var cudaVisibleDevices: String = ""
+    var driverVersion: String = ""
+    var userEnvEpoch: String = ""
+
+    // 零占用率（僵尸进程）监控
+    var zeroTotalGpuAlertCount: Int = 0
+    var zeroTotalCpuAlertCount: Int = 0
+    var zeroAlreadyAlertedGpuUsage: Boolean = false
+    var zeroAlreadyAlertedCpuUsage: Boolean = false
+    var zeroMaxConsecutiveCount: Int = 0
+    var zeroDetectionIntervalSeconds: Int = 0
 }
 
 /**
