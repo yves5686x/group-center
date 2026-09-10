@@ -50,6 +50,17 @@ heartbeat:
   # Ping失败报警阈值（秒），默认3600秒（1小时）
   ping-failure-alarm-threshold: 3600
 
+# 实时聚合层（pull-through-cache）：后端主动 pull agent(nvi-notify) 数据并做 TTL 内存缓存
+realtime:
+  # 缓存 TTL（秒）：命中期内直接返回缓存，不再拉取 agent
+  cache-ttl-seconds: 5
+  # 过期阈值（秒）：freshness 超过该值将数据标记为 stale（用于 last-known-good 回退）
+  stale-threshold: 60
+  # agent 反向代理 origin：机器 apiUrl 为相对路径（如 /gpu/3090）时必填，
+  # 后端拼接为绝对地址后再 pull；可用环境变量 REALTIME_AGENT_BASE_URL 覆盖。
+  # 若 apiUrl 本身已是 http(s) 绝对地址，则忽略此项。
+  agent-base-url: ${REALTIME_AGENT_BASE_URL:}
+
 # # https://blog.csdn.net/weixin_42703501/article/details/139587100
 # # https://www.jobrunr.io/en/documentation/configuration/spring/
 # org:
