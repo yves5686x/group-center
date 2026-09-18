@@ -10,6 +10,11 @@ class MachineYamlTest {
     fun testReadMachineYaml() {
         val path = "./Config/Machine/gpu.yaml"
 
+        // Private (gitignored) machine config; only run when it is present
+        org.junit.jupiter.api.Assumptions.assumeTrue(java.io.File(path).exists()) {
+            "$path not present; skipping"
+        }
+
         val text = ProgramFile.readFile(path)
 
         val result = MachineConfigParser.parseMachineYaml(text)
@@ -20,6 +25,11 @@ class MachineYamlTest {
     @Test
     fun testReadMachineInDir() {
         val path = "./Config/Machine/Deploy"
+
+        // Private (gitignored) machine configs; only run when the directory is present
+        org.junit.jupiter.api.Assumptions.assumeTrue(java.io.File(path).isDirectory()) {
+            "$path not present; skipping"
+        }
 
         val result = MachineConfigParser.parseMachineYamlInDir(path)
 

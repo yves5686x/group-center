@@ -2,6 +2,8 @@ server:
   port: 15090
 
 spring:
+  application:
+    name: group-center
   #  security:
   #    user:
   #      name: admin
@@ -32,10 +34,15 @@ logging:
       max-file-size: 10MB
       max-history: 7
 
-# Bot配置文件路径
+# Bot配置文件路径（权威来源；BotPushService / LarkBotConfig 共用）
 bot:
   config:
     file: Config/Bot/bot-groups.yaml
+
+# 代理配置文件路径（权威来源；ProxyConfigLoader 读取）
+proxy:
+  config:
+    file: Config/Proxy/proxy.yaml
 
 # 心跳配置
 heartbeat:
@@ -49,6 +56,8 @@ heartbeat:
   scheduled-interval: 300000
   # Ping失败报警阈值（秒），默认3600秒（1小时）
   ping-failure-alarm-threshold: 3600
+  # 报警推送间隔（秒）：相同类型报警的最小推送间隔，避免刷屏
+  alarm-push-interval: 3600
 
 # 实时聚合层（pull-through-cache）：后端主动 pull agent(nvi-notify) 数据并做 TTL 内存缓存
 realtime:

@@ -2,11 +2,11 @@ package com.khm.group.center.service.cache
 
 import com.khm.group.center.datatype.statistics.Report
 import com.khm.group.center.datatype.statistics.ReportType
+import com.khm.group.center.test.H2DatabaseTest
 import com.khm.group.center.utils.program.Slf4jKt
 import com.khm.group.center.utils.program.Slf4jKt.Companion.logger
 import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
-import org.springframework.boot.test.context.SpringBootTest
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.util.concurrent.TimeUnit
@@ -14,7 +14,7 @@ import java.util.concurrent.TimeUnit
 /**
  * 报告缓存管理器测试
  */
-@SpringBootTest
+@H2DatabaseTest
 class ReportCacheManagerTest {
 
     @Autowired

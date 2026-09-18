@@ -3,6 +3,7 @@ package com.khm.group.center.config
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.dataformat.yaml.YAMLFactory
 import com.khm.group.center.message.webhook.lark.LarkGroupBot
+import org.springframework.beans.factory.annotation.Value
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
 import java.nio.file.Files
@@ -11,10 +12,15 @@ import java.nio.file.Paths
 @Configuration
 class LarkBotConfig {
 
+    // 与 BotPushService 共用同一配置路径，此前这里被硬编码，
+    // 导致修改 bot.config.file 后飞书 bot 不跟随
+    @Value("\${bot.config.file}")
+    private lateinit var botConfigFile: String
+
     @Bean
     fun larkGroupBot(): LarkGroupBot {
         val yamlMapper = ObjectMapper(YAMLFactory())
-        val configFile = Paths.get("Config/Bot/bot-groups.yaml")
+        val configFile = Paths.get(botConfigFile)
         
         return try {
             val yamlContent = Files.readString(configFile)

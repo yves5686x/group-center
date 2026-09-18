@@ -1,14 +1,14 @@
 package com.khm.group.center.service
 
 import com.khm.group.center.db.model.client.GpuTaskInfoModel
+import com.khm.group.center.test.H2DatabaseTest
 import com.khm.group.center.utils.time.TimeAnalysisUtils
 import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
-import org.springframework.boot.test.context.SpringBootTest
 import java.time.LocalDateTime
 import java.time.ZoneId
 
-@SpringBootTest
+@H2DatabaseTest
 class SleepAnalysisTest {
 
     @Autowired

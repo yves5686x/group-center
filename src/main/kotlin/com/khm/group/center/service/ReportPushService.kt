@@ -13,7 +13,6 @@ import com.khm.group.center.utils.time.TimePeriod
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.stereotype.Service
 import java.nio.file.Files
-import java.nio.file.Path
 import java.nio.file.Paths
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
@@ -33,7 +32,6 @@ class ReportPushService {
     @Autowired
     lateinit var botPushService: BotPushService
 
-    private val reportStatusDir: Path = Paths.get("Config/Program/Report")
 
     /**
      * 推送今日日报到指定群组（今天凌晨12点到明天凌晨12点）

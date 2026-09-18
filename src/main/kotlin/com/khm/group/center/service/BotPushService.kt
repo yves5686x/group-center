@@ -15,8 +15,6 @@ import org.springframework.beans.factory.annotation.Value
 import org.springframework.stereotype.Service
 import org.yaml.snakeyaml.Yaml
 import java.io.FileInputStream
-import java.nio.file.Files
-import java.nio.file.Paths
 
 @Service
 @Slf4jKt
@@ -54,7 +52,8 @@ class BotPushService {
         }
     }
 
-    @Value("\${bot.config.file:Config/Bot/bot-groups.yaml}")
+    // 权威来源：application.yml 的 bot.config.file（无默认值，缺键启动即报错）
+    @Value("\${bot.config.file}")
     private lateinit var configFile: String
 
     init {
@@ -341,12 +340,4 @@ class BotPushService {
         }
     }
 
-    /**
-     * 加载Bot配置
-     */
-    private fun loadBotConfig(): BotConfig {
-        val configFile = Paths.get("Config/Bot/bot-groups.yaml")
-        val yamlContent = Files.readString(configFile)
-        return yamlMapper.readValue(yamlContent, BotConfig::class.java)
-    }
 }

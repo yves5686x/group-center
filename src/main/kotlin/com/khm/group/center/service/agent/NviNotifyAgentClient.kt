@@ -40,7 +40,9 @@ class NviNotifyAgentClient {
      * 由公网入口（反向代理）转发到内网 agent；后端 pull 时需拼接该 origin。
      * 若 apiUrl 本身已是 http(s) 绝对地址，则忽略此前缀。
      */
-    @Value("\${realtime.agent-base-url:}")
+    // 权威来源：application.yml 的 realtime.agent-base-url（默认空串，由 yml 的
+    // ${REALTIME_AGENT_BASE_URL:} 占位符承接环境变量）
+    @Value("\${realtime.agent-base-url}")
     private var agentBaseUrl: String = ""
 
     fun getGpuCount(baseUrl: String): AgentGpuCount? =

@@ -183,6 +183,8 @@ dependencies {
     testImplementation("org.springframework.boot:spring-boot-starter-test:${springBootVersion}")
     testImplementation("org.mybatis.spring.boot:mybatis-spring-boot-starter-test:${myBatisVersion}")
     testImplementation("org.jetbrains.kotlin:kotlin-test")
+    // In-memory DB for @SpringBootTest with the "test" profile (src/test/resources/application-test.yml)
+    testRuntimeOnly("com.h2database:h2:2.3.232")
     // testImplementation("io.mockk:mockk:1.13.12")
 }
 

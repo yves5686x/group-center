@@ -1,13 +1,25 @@
+# ============================================================================
+# 测试专用配置（@ActiveProfiles("test") 时生效）
+#
+# 数据源 url / driver-class-name 的权威来源是组合注解
+# com.khm.group.center.test.H2DatabaseTest（内联属性优先级高于环境变量）。
+# 不要把 url/driver 加回这里：环境变量 SPRING_DATASOURCE_URL 会覆盖本文件的
+# url 而 driver 仍是 H2，造成驱动-URL 错配挂死测试进程。
+# ============================================================================
 spring:
   datasource:
-    url: jdbc:h2:mem:testdb;DB_CLOSE_DELAY=-1
-    driver-class-name: org.h2.Driver
     username: sa
     password:
-  jpa:
-    database-platform: org.hibernate.dialect.H2Dialect
-    hibernate:
-      ddl-auto: create-drop
+    # DB 不可用时快速失败：Druid 默认无限重试建连，会挂死整个测试套件
+    druid:
+      break-after-acquire-failure: true
+      connection-error-retry-attempts: 0
+  sql:
+    # H2 无法执行 MySQL 风格的 schema（库前缀 / COMMENT / 表内 INDEX），
+    # 使用 H2 移植版；建表错误不允许静默吞掉
+    init:
+      schema-locations: classpath:db/h2/init-schema.sql
+      continue-on-error: false
 
 proxy:
   config:

@@ -1,7 +1,15 @@
+# ============================================================================
+# Docker 部署基座配置
+# docker.start.sh 以 --spring.config.location=file:application.yml 启动，
+# 本文件会【完全替换】classpath 的 application.yml，因此必须包含全部基础键。
+# ⚠️ 修改 application.yml 中的 bot/proxy/realtime/heartbeat 时必须同步到这里。
+# ============================================================================
 server:
   port: 15090
 
 spring:
+  application:
+    name: group-center
   #  security:
   #    user:
   #      name: admin
@@ -26,6 +34,28 @@ logging:
     rollingpolicy:
       max-file-size: 10MB
       max-history: 7
+
+# 与 application.yml 保持同步（见文件头说明）
+bot:
+  config:
+    file: Config/Bot/bot-groups.yaml
+
+proxy:
+  config:
+    file: Config/Proxy/proxy.yaml
+
+heartbeat:
+  time-sync-threshold: 120
+  offline-timeout: 7200
+  online-check-interval: 120
+  scheduled-interval: 300000
+  ping-failure-alarm-threshold: 3600
+  alarm-push-interval: 3600
+
+realtime:
+  cache-ttl-seconds: 5
+  stale-threshold: 60
+  agent-base-url: ${REALTIME_AGENT_BASE_URL:}
 
 # https://blog.csdn.net/weixin_42703501/article/details/139587100
 # https://www.jobrunr.io/en/documentation/configuration/spring/

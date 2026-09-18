@@ -1,17 +1,15 @@
 package com.khm.group.center.service
 
+import com.khm.group.center.test.H2DatabaseTest
 import com.khm.group.center.utils.time.DateTimeUtils
 import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
-import org.springframework.boot.test.context.SpringBootTest
-import org.springframework.test.context.TestPropertySource
 
 /**
  * BotPushService 测试类
  * 测试紧急报警功能
  */
-@SpringBootTest
-@TestPropertySource(locations = ["classpath:application-test.yml"])
+@H2DatabaseTest
 class BotPushServiceTest {
 
     @Autowired

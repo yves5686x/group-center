@@ -59,8 +59,8 @@ ENV RUN_IN_DOCKER=True
 
 WORKDIR "$BASE_PATH"
 
-ENV LOGS_PATH="$BASE_PATH/logs"
-
+# FileEnv.toml 是 ConfigEnvironment（非 Spring 体系）的密钥来源
+# （日志路径由 logback-spring.xml 管理，无 LOGS_PATH 变量）
 ENV FILE_ENV_PATH="$BASE_PATH/Config/Program/FileEnv.toml"
 
 # Copy Directory

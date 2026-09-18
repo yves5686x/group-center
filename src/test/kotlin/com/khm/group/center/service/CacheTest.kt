@@ -1,18 +1,16 @@
 package com.khm.group.center.service
 
 import com.khm.group.center.service.cache.ReportCacheManager
+import com.khm.group.center.test.H2DatabaseTest
 import org.junit.jupiter.api.Test
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Autowired
-import org.springframework.boot.test.context.SpringBootTest
-import org.springframework.test.context.ActiveProfiles
 
 /**
  * 缓存测试类 - 测试各种报告类型的缓存功能
  * 每种报告类型都进行连续两次调用，验证缓存是否正确工作
  */
-@SpringBootTest
-@ActiveProfiles("test")
+@H2DatabaseTest
 class CacheTest {
 
     @Autowired

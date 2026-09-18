@@ -28,7 +28,8 @@ class ProxyConfigLoader {
 
     private val yamlMapper = ObjectMapper(YAMLFactory()).registerKotlinModule()
 
-    @Value("\${proxy.config.file:Config/Proxy/proxy.yaml}")
+    // 权威来源：application.yml 的 proxy.config.file（无默认值，缺键启动即报错）
+    @Value("\${proxy.config.file}")
     private lateinit var configFilePath: String
 
     /**

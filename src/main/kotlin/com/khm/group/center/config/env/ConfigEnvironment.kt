@@ -10,6 +10,28 @@ import com.khm.group.center.utils.file.ProgramFile
 
 class ConfigEnvironment {
 
+    /**
+     * ============================================================================
+     * 配置规范（非 Spring 体系，勿与 application.yml 混用）
+     * ============================================================================
+     * 本类管理的键【不会】进入 Spring Environment：在这里写入的值对
+     * spring.datasource.* 等 Spring 配置完全不可见，反之亦然。
+     *
+     * 优先级：FILE_ENV_LIST（FileEnv.toml/json/yaml，路径由 FILE_ENV_PATH 指定）
+     *        > OS 环境变量 > 下面的代码默认值
+     *
+     * 键清单（新增键必须登记在此并注明用途）：
+     *   密钥类      PASSWORD_JWT, LARK_BOT_APP_ID, LARK_BOT_APP_SECRET
+     *   路径类      FILE_ENV_PATH, CONFIG_USER_DIR_PATH, CONFIG_USER_PATH,
+     *              CONFIG_MACHINE_DIR_PATH, CONFIG_MACHINE_PATH,
+     *              CONFIG_DASHBOARD_SITE_DIR_PATH, CONFIG_DASHBOARD_SITE_PATH,
+     *              CLIENT_ENV_CONFIG_PATH, USER_FILE_SAVE_PATH
+     *   开关类      RUN_IN_DOCKER, MACHINE_AUTH_REMEMBER_IP, GROUP_BOT_AT_ENABLE,
+     *              FILTER_MULTI_GPU_TASKS,
+     *              REPORT_{DAILY,WEEKLY,MONTHLY,YEARLY}_ENABLE,
+     *              ALARM_{PING_FAILURE,AGENT_OFFLINE,TIME_SYNC}_ENABLE
+     * ============================================================================
+     */
     companion object {
         var FILE_ENV_LIST: HashMap<String, String> = HashMap()
 

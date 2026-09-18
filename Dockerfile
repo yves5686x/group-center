@@ -28,8 +28,8 @@ ENV TZ=Asia/Shanghai
 RUN ln -snf /usr/share/zoneinfo/${TZ} /etc/localtime \
     && echo ${TZ} > /etc/timezone
 
-ENV LOGS_PATH="$BASE_PATH/logs"
-
+# FileEnv.toml 是 ConfigEnvironment（非 Spring 体系）的密钥来源
+# （日志路径由 logback-spring.xml 管理，容器内经 volume 挂载覆盖，无 LOGS_PATH 变量）
 ENV FILE_ENV_PATH="$BASE_PATH/Config/Program/FileEnv.toml"
 
 # Copy Directory

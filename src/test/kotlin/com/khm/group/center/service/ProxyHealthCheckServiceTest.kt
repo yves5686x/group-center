@@ -6,16 +6,14 @@ import com.khm.group.center.datatype.config.TestConfig
 import com.khm.group.center.datatype.config.TestUrlConfig
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Test
+import com.khm.group.center.test.H2DatabaseTest
 import org.springframework.beans.factory.annotation.Autowired
-import org.springframework.boot.test.context.SpringBootTest
-import org.springframework.test.context.TestPropertySource
 
 /**
  * Proxy health check service test
  * Test the functionality of HTTP proxy accessing HTTPS websites
  */
-@SpringBootTest
-@TestPropertySource(locations = ["classpath:application-test.yml"])
+@H2DatabaseTest
 class ProxyHealthCheckServiceTest {
 
     @Autowired

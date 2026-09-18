@@ -1,16 +1,16 @@
 package com.khm.group.center.service
 
+import com.khm.group.center.test.H2DatabaseTest
 import com.khm.group.center.utils.program.Slf4jKt
 import com.khm.group.center.utils.program.Slf4jKt.Companion.logger
 import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
-import org.springframework.boot.test.context.SpringBootTest
 
 /**
  * 报告推送测试
  * 用于测试昨日日报推送功能
  */
-@SpringBootTest
+@H2DatabaseTest
 class ReportPushTest {
 
     @Autowired

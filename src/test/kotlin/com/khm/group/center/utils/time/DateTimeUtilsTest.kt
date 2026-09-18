@@ -1,8 +1,7 @@
 package com.khm.group.center.utils.time
 
+import com.khm.group.center.test.H2DatabaseTest
 import org.junit.jupiter.api.Test
-import org.springframework.boot.test.context.SpringBootTest
-import org.springframework.test.context.TestPropertySource
 import java.time.Instant
 import java.time.LocalDateTime
 import java.time.ZoneId
@@ -12,8 +11,7 @@ import java.time.format.DateTimeFormatter
  * 时间戳转换测试类
  * 对应 Scripts/TestTimestampConversion.kt 的功能
  */
-@SpringBootTest
-@TestPropertySource(locations = ["classpath:application-test.yml"])
+@H2DatabaseTest
 class DateTimeUtilsTest {
 
     @Test

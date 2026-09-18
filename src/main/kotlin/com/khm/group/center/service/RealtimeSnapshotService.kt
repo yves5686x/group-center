@@ -45,12 +45,12 @@ class RealtimeSnapshotService {
     @Autowired
     private lateinit var machineStatusService: MachineStatusService
 
-    /** 缓存 TTL（秒）：命中期内直接返回缓存，不再拉取 agent。 */
-    @Value("\${realtime.cache-ttl-seconds:5}")
+    /** 缓存 TTL（秒）：命中期内直接返回缓存，不再拉取 agent。（权威来源：application.yml） */
+    @Value("\${realtime.cache-ttl-seconds}")
     private var cacheTtlSeconds: Long = 5
 
-    /** 过期阈值（秒）：freshness 超过该值标记 stale（用于 last-known-good）。 */
-    @Value("\${realtime.stale-threshold:60}")
+    /** 过期阈值（秒）：freshness 超过该值标记 stale（用于 last-known-good）。（权威来源：application.yml） */
+    @Value("\${realtime.stale-threshold}")
     private var staleThresholdSeconds: Long = 60
 
     /** 单台机器一次完整拉取的结果（GPU + 磁盘 + 系统内存）。 */

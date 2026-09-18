@@ -29,7 +29,7 @@ class MachinePingScheduler {
     /**
      * 根据配置执行ping检测
      */
-    @Scheduled(fixedRateString = "\${heartbeat.scheduled-interval:3600000}") // 默认1小时
+    @Scheduled(fixedRateString = "\${heartbeat.scheduled-interval}") // 权威来源：application.yml
     fun scheduledPing() {
         if (MachineConfig.machineList.isEmpty()) {
             logger.warn("Machine list is empty, skip ping check")
@@ -63,7 +63,7 @@ class MachinePingScheduler {
     /**
      * 根据配置执行状态清理（清理过期状态）
      */
-    @Scheduled(fixedRateString = "\${heartbeat.scheduled-interval:3600000}") // 默认1小时
+    @Scheduled(fixedRateString = "\${heartbeat.scheduled-interval}") // 权威来源：application.yml
     fun scheduledCleanup() {
         machineStatusService.cleanupExpiredStatus()
         logger.debug("Machine status cleanup completed")
