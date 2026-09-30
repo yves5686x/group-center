@@ -71,10 +71,24 @@ realtime:
   # 单台机器一次拉取会按 GPU 张数放大请求（每卡 usage + task），
   # agent 报异常张数时按此上限截断，防止请求数失控。
   max-gpu-count: 32
+  # 单台机器一次完整拉取的总预算（秒）。单请求超时约束不了整条链路——
+  # 8 卡机 19 个请求的超时是叠加的，最坏可达 40 秒以上，而这段逻辑占着
+  # Tomcat 工作线程。超预算即放弃本轮并回退缓存。
+  pull-timeout-seconds: 15
+  # 全局并发拉取上限：同时最多拉取几台机器。超出则快速失败并回退缓存，
+  # 不排队——排队等于继续占住工作线程，正是要避免的。
+  max-concurrent-pulls: 4
   # agent 反向代理 origin：机器 apiUrl 为相对路径（如 /gpu/3090）时必填，
   # 后端拼接为绝对地址后再 pull；可用环境变量 REALTIME_AGENT_BASE_URL 覆盖。
   # 若 apiUrl 本身已是 http(s) 绝对地址，则忽略此项。
   agent-base-url: ${REALTIME_AGENT_BASE_URL:}
+
+# GPU 任务公开查询端点（/web/open/gpu-tasks/**）
+gpu-task:
+  # /recent 单次返回的最大记录数：该端点无鉴权，没有行数上限等于开放全表读取
+  recent-max-rows: 500
+  # /recent 时间窗口（小时）上限：hours 超出则钳制到该值并打 WARN，挡住 hours=876000 这类变相拉全表的用法
+  recent-max-hours: 8760
 
 # # https://blog.csdn.net/weixin_42703501/article/details/139587100
 # # https://www.jobrunr.io/en/documentation/configuration/spring/

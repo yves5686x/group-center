@@ -3,6 +3,7 @@ package com.khm.group.center.service
 import com.khm.group.center.datatype.statistics.*
 import com.khm.group.center.db.model.client.GpuTaskInfoModel
 import com.khm.group.center.db.query.GpuTaskQuery
+import com.khm.group.center.utils.format.CommandLineSanitizer
 import com.khm.group.center.utils.time.TimeAnalysisUtils
 import com.khm.group.center.utils.time.TimePeriod
 import org.springframework.beans.factory.annotation.Autowired
@@ -101,6 +102,9 @@ class StatisticsServiceImpl : BaseStatisticsService {
     }
 
     override fun getSleepAnalysis(tasks: List<GpuTaskInfoModel>, startTime: Long, endTime: Long): SleepAnalysis {
+        // 作息分析把 lateNightTasks / earlyMorningTasks / 两个 champion 原样带给前端，
+        // 里面带着完整的 command_line，因此在服务层出口统一脱敏（统计只用到 user/时间，不受影响）
+        CommandLineSanitizer.sanitizeAll(tasks)
         return timeAnalysisUtils.analyzeSleepPattern(tasks, startTime, endTime)
     }
 

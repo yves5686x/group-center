@@ -16,15 +16,22 @@ import com.khm.group.center.datatype.realtime.SystemSnapshot
 import com.khm.group.center.service.agent.NviNotifyAgentClient
 import com.khm.group.center.utils.program.Slf4jKt
 import com.khm.group.center.utils.program.Slf4jKt.Companion.logger
+import com.khm.group.center.utils.format.CommandLineSanitizer
 import com.khm.group.center.utils.time.DateTimeUtils
+import jakarta.annotation.PostConstruct
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.withTimeoutOrNull
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.stereotype.Service
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.Semaphore
+import java.util.concurrent.TimeUnit
 
 /**
  * 实时聚合服务（pull-through-cache）。
@@ -68,6 +75,29 @@ class RealtimeSnapshotService {
     @Value("\${realtime.max-gpu-count}")
     private var maxGpuCount: Int = 32
 
+    /**
+     * 单台机器一次完整拉取的总预算（秒）。
+     *
+     * 一次拉取包含按 GPU 张数放大的 HTTP 调用（8 卡机 19 个请求），逐个超时相加
+     * 最坏可达 40 秒以上。单个请求的超时只约束那一个请求，约束不了整条链路；
+     * 而这段逻辑跑在 Tomcat 工作线程上，一旦 agent 处于「丢包」状态（请求挂起直到超时），
+     * 数十个并发看板请求就能占满线程池，把心跳接收、机器人推送等无关接口一起拖垮。
+     * 这里给整次拉取一个总闸门，超时即放弃本轮。（权威来源：application.yml）
+     */
+    @Value("\${realtime.pull-timeout-seconds}")
+    private var pullTimeoutSeconds: Long = 15
+
+    /**
+     * 全局并发拉取上限：同一时刻最多有多少台机器在被拉取。
+     *
+     * 单飞锁只保证「同一台机器」不重复拉取，不限制「不同机器」同时拉。
+     * 打开看板概览会遍历所有机器，若每台都要 40 秒，则请求数与机器数同阶增长。
+     * 超出上限时直接快速失败并回退到缓存，而不是排队——排队等于继续占住线程，
+     * 那正是要避免的情况。（权威来源：application.yml）
+     */
+    @Value("\${realtime.max-concurrent-pulls}")
+    private var maxConcurrentPulls: Int = 4
+
     /** 单台机器一次完整拉取的结果（GPU + 磁盘 + 系统内存）。 */
     private class MachinePullResult(
         val gpuCount: Int,
@@ -83,6 +113,22 @@ class RealtimeSnapshotService {
     // serverNameEng -> 拉取锁。仅用于把同一台机器的并发 miss 合并成一次拉取，
     // 键只能来自 MachineConfig.machineList（启动期一次性赋值），因此不会无界增长。
     private val pullLocks = ConcurrentHashMap<String, Any>()
+
+    /** 全局拉取闸门：限制同时进行的拉取数，上限由 maxConcurrentPulls 控制。 */
+    private val pullGate = Semaphore(DEFAULT_MAX_CONCURRENT_PULLS)
+
+    @PostConstruct
+    fun initPullGate() {
+        // 字段注入发生在构造之后，闸门容量只能在注入完成后再定容
+        if (maxConcurrentPulls > 0) {
+            pullGate.release(maxConcurrentPulls - DEFAULT_MAX_CONCURRENT_PULLS)
+        } else {
+            logger.warn(
+                "realtime.max-concurrent-pulls={} is invalid, keeping default {}",
+                maxConcurrentPulls, DEFAULT_MAX_CONCURRENT_PULLS
+            )
+        }
+    }
 
     /** 一次读取的数据来源结果。 */
     private class PullOutcome(
@@ -196,7 +242,18 @@ class RealtimeSnapshotService {
                 return PullOutcome(machine, cached!!, "cache", null)
             }
 
-            val fresh = pullMachine(machine)
+            // 全局闸门：拿不到名额就不排队，直接回退到缓存。
+            // 排队会继续占住 Tomcat 线程，正是这里要避免的情况。
+            if (!pullGate.tryAcquire()) {
+                logger.warn("Realtime pull gate is full (max={}), skipping pull: {}", maxConcurrentPulls, key)
+                return fallbackOutcome(machine, cached, "too many concurrent realtime pulls, skipped this round")
+            }
+
+            val fresh = try {
+                withPullTimeout { pullMachine(machine) }
+            } finally {
+                pullGate.release()
+            }
             if (fresh != null) {
                 // 并发写回时只接受更新的快照，避免慢请求用旧数据覆盖快请求的结果
                 val winner = cache.merge(key, fresh) { old, new ->
@@ -205,14 +262,7 @@ class RealtimeSnapshotService {
                 return PullOutcome(machine, winner, "agent", null)
             }
 
-            // 拉取失败：回退到过期缓存（last-known-good），但受硬上限约束
-            return if (cached != null && isWithinMaxStale(cached)) {
-                PullOutcome(machine, cached, "last-known-good", "agent pull failed, serving stale cache")
-            } else if (cached != null) {
-                PullOutcome(machine, null, "none", "agent unreachable and cached snapshot is too old")
-            } else {
-                PullOutcome(machine, null, "none", "agent unreachable and no cached snapshot")
-            }
+            return fallbackOutcome(machine, cached, "agent pull failed, serving stale cache")
         }
     }
 
@@ -220,6 +270,56 @@ class RealtimeSnapshotService {
     private fun isFresh(data: MachinePullResult?): Boolean {
         if (data == null) return false
         return DateTimeUtils.getCurrentTimestamp() - data.pulledAt <= cacheTtlSeconds
+    }
+
+    /**
+     * 拉取失败时的统一回退：受 last-known-good 硬上限约束。
+     *
+     * 抽出来是因为「闸门拒绝」和「拉取失败」两条路径的降级规则必须一致，
+     * 否则会出现某条路径漏掉年龄上限、又返回陈旧快照的情况。
+     */
+    private fun fallbackOutcome(
+        machine: MachineConfig,
+        cached: MachinePullResult?,
+        reason: String
+    ): PullOutcome {
+        return when {
+            cached != null && isWithinMaxStale(cached) ->
+                PullOutcome(machine, cached, "last-known-good", reason)
+            cached != null ->
+                PullOutcome(machine, null, "none", "$reason and cached snapshot is too old")
+            else ->
+                PullOutcome(machine, null, "none", "$reason and no cached snapshot")
+        }
+    }
+
+    /**
+     * 在总预算内执行一次拉取，超时即放弃本轮。
+     *
+     * 关键点：把拉取丢到 [Dispatchers.IO] 独立执行，本线程只「等到预算耗尽为止」，
+     * 而不是等拉取本身完成。原先用 `withTimeout { pullMachine() }` 是无效的——
+     * [pullMachine] 内部是 OkHttp 阻塞调用，不存在能响应协程取消的挂起点，
+     * 超时信号要等下一个挂起点才被检查，而那时线程早已陪着等完了。
+     *
+     * 因此预算只约束「调用方等多久」，而非「工作跑多久」：到点立即返回、
+     * 释放调用方线程，这正是要达到的效果。被放弃的工作仍在后台跑完，
+     * 由 OkHttp 自身的 callTimeout 收尾，不会无限悬挂。
+     */
+    private fun <T> withPullTimeout(block: suspend CoroutineScope.() -> T): T? {
+        val budgetMillis = TimeUnit.SECONDS.toMillis(pullTimeoutSeconds)
+        // 独立作用域很关键：若用 runBlocking 自身的 scope 启 async，那个 deferred 就是
+        // runBlocking 的子协程，而 runBlocking 必须等所有子协程结束才返回——
+        // 于是超时虽然准点返回了 null，调用方线程仍会陪着等到活干完，等于没超时。
+        // 放到独立作用域里，被放弃的工作就在后台自行收尾，不再占用调用方线程。
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        return runBlocking {
+            val deferred = scope.async { block() }
+            val result = withTimeoutOrNull(budgetMillis) { deferred.await() }
+            if (result == null && !deferred.isCompleted) {
+                logger.warn("Realtime pull exceeded budget of {}s, abandoning this round", pullTimeoutSeconds)
+            }
+            result
+        }
     }
 
     /** 缓存年龄是否仍在 last-known-good 硬上限内。 */
@@ -323,7 +423,8 @@ class RealtimeSnapshotService {
         b.localRank = item.localRank
         b.condaEnv = item.condaEnv
         b.screenSessionName = item.screenSessionName
-        b.command = item.command
+        // agent 上报的命令行同样可能内嵌 wandb key / HF token，与 command_line 同源同样要脱敏
+        b.command = CommandLineSanitizer.maskCredentials(item.command)
         b.cpuPercent = item.cpuPercent
         b.gpuUtilization = item.gpuUtilization
 
@@ -375,5 +476,10 @@ class RealtimeSnapshotService {
         v.memorySwapTotalMb = s.memorySwapTotalMb
         v.memorySwapUsedMb = s.memorySwapUsedMb
         return v
+    }
+
+    private companion object {
+        /** 闸门默认容量。真正的取值来自 realtime.max-concurrent-pulls，见 initPullGate()。 */
+        const val DEFAULT_MAX_CONCURRENT_PULLS = 4
     }
 }

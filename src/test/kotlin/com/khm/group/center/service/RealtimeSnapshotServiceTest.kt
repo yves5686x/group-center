@@ -88,6 +88,8 @@ class RealtimeSnapshotServiceTest {
         ReflectionTestUtils.setField(service, "staleThresholdSeconds", 60L)
         ReflectionTestUtils.setField(service, "maxStaleSeconds", 300L)
         ReflectionTestUtils.setField(service, "maxGpuCount", 32)
+        ReflectionTestUtils.setField(service, "pullTimeoutSeconds", 15L)
+        ReflectionTestUtils.setField(service, "maxConcurrentPulls", 4)
     }
 
     @Test
@@ -304,5 +306,57 @@ class RealtimeSnapshotServiceTest {
             "pulledAt 应为拉取完成时刻，实际=${v1.snapshotTime}"
         )
         assertTrue(v1.freshness >= 0)
+    }
+
+    // ==================== S4：总超时 + 并发闸门 ====================
+
+    @Test
+    fun `slow agent is abandoned once the pull budget expires`() {
+        // 单个请求的超时约束不了整条链路：这里让 getGpuCount 睡 3 秒，
+        // 而总预算只有 1 秒，验证整体会被放弃而不是陪着一起等
+        ReflectionTestUtils.setField(service, "pullTimeoutSeconds", 1L)
+        Mockito.`when`(agentClient.getGpuCount(Mockito.anyString())).thenAnswer {
+            Thread.sleep(3000)
+            AgentGpuCount(result = 1)
+        }
+
+        val start = System.nanoTime()
+        val view = service.buildGpuView(machineNameEng)
+        val elapsedMs = (System.nanoTime() - start) / 1_000_000
+
+        assertEquals("none", view.source, "超出总预算后不应再返回数据")
+        assertTrue(elapsedMs < 2500, "应在预算附近返回，实际耗时 ${elapsedMs}ms")
+    }
+
+    @Test
+    fun `concurrent pull gate falls back to cache instead of queueing`() {
+        ReflectionTestUtils.setField(service, "cacheTtlSeconds", -1L)
+
+        // 预先占满所有名额，模拟其它机器正在拉取
+        val gate = ReflectionTestUtils.getField(service, "pullGate") as java.util.concurrent.Semaphore
+        val permits = 4
+        assertTrue(gate.tryAcquire(permits), "测试前置条件：应能占满全部名额")
+
+        val view = service.buildGpuView(machineNameEng)
+        assertEquals("none", view.source, "拿不到名额时应快速失败并回退，而不是排队")
+        Mockito.verify(agentClient, Mockito.never()).getGpuCount(Mockito.anyString())
+
+        // 名额归还后，恢复正常拉取
+        gate.release(permits)
+        assertEquals("agent", service.buildGpuView(machineNameEng).source)
+    }
+
+    @Test
+    fun `pull gate is released even when the pull times out`() {
+        ReflectionTestUtils.setField(service, "pullTimeoutSeconds", 1L)
+        Mockito.`when`(agentClient.getGpuCount(Mockito.anyString())).thenAnswer {
+            Thread.sleep(3000)
+            AgentGpuCount(result = 1)
+        }
+
+        service.buildGpuView(machineNameEng)
+
+        val gate = ReflectionTestUtils.getField(service, "pullGate") as java.util.concurrent.Semaphore
+        assertEquals(4, gate.availablePermits(), "超时的拉取也必须归还名额，否则闸门会永久卡死")
     }
 }
