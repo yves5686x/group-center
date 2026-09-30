@@ -55,6 +55,8 @@ heartbeat:
 realtime:
   cache-ttl-seconds: 5
   stale-threshold: 60
+  max-stale-seconds: 300
+  max-gpu-count: 32
   agent-base-url: ${REALTIME_AGENT_BASE_URL:}
 
 # https://blog.csdn.net/weixin_42703501/article/details/139587100

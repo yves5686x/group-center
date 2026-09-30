@@ -53,6 +53,21 @@ class RealtimeSnapshotService {
     @Value("\${realtime.stale-threshold}")
     private var staleThresholdSeconds: Long = 60
 
+    /**
+     * last-known-good 硬上限（秒）：拉取失败时，只有缓存年龄不超过该值才回退。
+     * 超限则返回 source=none，避免把很久以前的快照当现状展示。
+     * （权威来源：application.yml）
+     */
+    @Value("\${realtime.max-stale-seconds}")
+    private var maxStaleSeconds: Long = 300
+
+    /**
+     * 单台机器允许的最大 GPU 张数：一次拉取按张数放大请求（每卡 usage + task），
+     * agent 报异常值时按此上限截断。（权威来源：application.yml）
+     */
+    @Value("\${realtime.max-gpu-count}")
+    private var maxGpuCount: Int = 32
+
     /** 单台机器一次完整拉取的结果（GPU + 磁盘 + 系统内存）。 */
     private class MachinePullResult(
         val gpuCount: Int,
@@ -64,6 +79,10 @@ class RealtimeSnapshotService {
 
     // serverNameEng -> 最近一次成功拉取的结果
     private val cache = ConcurrentHashMap<String, MachinePullResult>()
+
+    // serverNameEng -> 拉取锁。仅用于把同一台机器的并发 miss 合并成一次拉取，
+    // 键只能来自 MachineConfig.machineList（启动期一次性赋值），因此不会无界增长。
+    private val pullLocks = ConcurrentHashMap<String, Any>()
 
     /** 一次读取的数据来源结果。 */
     private class PullOutcome(
@@ -155,33 +174,57 @@ class RealtimeSnapshotService {
         val machine = MachineConfig.getMachineByNameEng(key)
             ?: return PullOutcome(null, null, "none", "unknown machine: $key")
 
-        val cached = cache[key]
-
         if (machine.apiUrl.isBlank()) {
-            return if (cached != null) {
+            val cached = cache[key]
+            return if (cached != null && isWithinMaxStale(cached)) {
                 PullOutcome(machine, cached, "last-known-good", "machine has no apiUrl, serving cache")
             } else {
                 PullOutcome(machine, null, "none", "machine has no apiUrl configured")
             }
         }
 
-        val now = DateTimeUtils.getCurrentTimestamp()
-        if (cached != null && now - cached.pulledAt <= cacheTtlSeconds) {
-            return PullOutcome(machine, cached, "cache", null)
+        if (isFresh(cache[key])) {
+            return PullOutcome(machine, cache[key]!!, "cache", null)
         }
 
-        val fresh = pullMachine(machine)
-        if (fresh != null) {
-            cache[key] = fresh
-            return PullOutcome(machine, fresh, "agent", null)
-        }
+        // 单飞：同一台机器的并发 miss 合并成一次拉取，避免把 agent 打成放大器
+        val lock = pullLocks.computeIfAbsent(key) { Any() }
+        synchronized(lock) {
+            // 双检：等锁期间可能已被其它线程刷新
+            val cached = cache[key]
+            if (isFresh(cached)) {
+                return PullOutcome(machine, cached!!, "cache", null)
+            }
 
-        // 拉取失败：回退到过期缓存（last-known-good）
-        return if (cached != null) {
-            PullOutcome(machine, cached, "last-known-good", "agent pull failed, serving stale cache")
-        } else {
-            PullOutcome(machine, null, "none", "agent unreachable and no cached snapshot")
+            val fresh = pullMachine(machine)
+            if (fresh != null) {
+                // 并发写回时只接受更新的快照，避免慢请求用旧数据覆盖快请求的结果
+                val winner = cache.merge(key, fresh) { old, new ->
+                    if (new.pulledAt >= old.pulledAt) new else old
+                }
+                return PullOutcome(machine, winner, "agent", null)
+            }
+
+            // 拉取失败：回退到过期缓存（last-known-good），但受硬上限约束
+            return if (cached != null && isWithinMaxStale(cached)) {
+                PullOutcome(machine, cached, "last-known-good", "agent pull failed, serving stale cache")
+            } else if (cached != null) {
+                PullOutcome(machine, null, "none", "agent unreachable and cached snapshot is too old")
+            } else {
+                PullOutcome(machine, null, "none", "agent unreachable and no cached snapshot")
+            }
         }
+    }
+
+    /** 缓存是否仍在 TTL 内。 */
+    private fun isFresh(data: MachinePullResult?): Boolean {
+        if (data == null) return false
+        return DateTimeUtils.getCurrentTimestamp() - data.pulledAt <= cacheTtlSeconds
+    }
+
+    /** 缓存年龄是否仍在 last-known-good 硬上限内。 */
+    private fun isWithinMaxStale(data: MachinePullResult): Boolean {
+        return DateTimeUtils.getCurrentTimestamp() - data.pulledAt <= maxStaleSeconds
     }
 
     /**
@@ -189,10 +232,18 @@ class RealtimeSnapshotService {
      */
     private fun pullMachine(machine: MachineConfig): MachinePullResult? {
         val apiUrl = machine.apiUrl
-        val now = DateTimeUtils.getCurrentTimestamp()
 
         val gpuCountResp = agentClient.getGpuCount(apiUrl)
-        val gpuCount = gpuCountResp?.result ?: 0
+        val reportedGpuCount = gpuCountResp?.result ?: 0
+        val gpuCount = if (reportedGpuCount > maxGpuCount) {
+            logger.warn(
+                "Agent reported an implausible gpu count, clamping: {} -> {} (machine={})",
+                reportedGpuCount, maxGpuCount, machine.nameEng
+            )
+            maxGpuCount
+        } else {
+            reportedGpuCount
+        }
 
         val gpus: List<GpuSnapshot> = if (gpuCount > 0) {
             runBlocking {
@@ -211,9 +262,11 @@ class RealtimeSnapshotService {
         val diskResp = agentClient.getDiskUsage(apiUrl)
         val sysResp = agentClient.getSystemInfo(apiUrl)
 
-        val anySuccess = gpuCountResp != null ||
-                gpus.any { it.hasData } ||
-                diskResp != null ||
+        // 只有拿到实质内容才算成功。仅 gpu_count 单独成功时，gpus 会是一组
+        // hasData=false 的空卡，若据此判成功，会把「agent 半挂」显示成
+        // 「N 张卡、无数据、来源 agent、数据很新」，比退回旧数据更具欺骗性。
+        val anySuccess = gpus.any { it.hasData } ||
+                diskResp?.diskUsage?.isNotEmpty() == true ||
                 sysResp != null
 
         if (!anySuccess) {
@@ -226,7 +279,9 @@ class RealtimeSnapshotService {
             gpus = gpus,
             disks = diskResp?.diskUsage?.map { toDiskSnapshot(it) } ?: listOf(),
             system = sysResp?.let { toSystemSnapshot(it) },
-            pulledAt = now
+            // 取拉取完成时刻：一次拉取包含按 GPU 张数放大的 HTTP 调用，
+            // 若取开始时刻，写入缓存时可能已超过 TTL，导致缓存永不命中。
+            pulledAt = DateTimeUtils.getCurrentTimestamp()
         )
     }
 

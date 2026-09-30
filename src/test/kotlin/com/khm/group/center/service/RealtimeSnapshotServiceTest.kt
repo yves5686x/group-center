@@ -9,6 +9,7 @@ import com.khm.group.center.datatype.agent.AgentGpuUsageInfo
 import com.khm.group.center.datatype.agent.AgentSystemInfo
 import com.khm.group.center.datatype.config.MachineConfig
 import com.khm.group.center.service.agent.NviNotifyAgentClient
+import com.khm.group.center.utils.time.DateTimeUtils
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNotNull
@@ -85,6 +86,8 @@ class RealtimeSnapshotServiceTest {
         ReflectionTestUtils.setField(service, "machineStatusService", statusService)
         ReflectionTestUtils.setField(service, "cacheTtlSeconds", 5L)
         ReflectionTestUtils.setField(service, "staleThresholdSeconds", 60L)
+        ReflectionTestUtils.setField(service, "maxStaleSeconds", 300L)
+        ReflectionTestUtils.setField(service, "maxGpuCount", 32)
     }
 
     @Test
@@ -166,5 +169,140 @@ class RealtimeSnapshotServiceTest {
         assertTrue(list[0].isGpu)
         // 列表接口不应触发对 agent 的实时拉取
         Mockito.verify(agentClient, Mockito.never()).getGpuCount(Mockito.anyString())
+    }
+
+    // ==================== last-known-good 硬上限 ====================
+
+    @Test
+    fun `agent down serves last-known-good within max stale window`() {
+        ReflectionTestUtils.setField(service, "cacheTtlSeconds", -1L)
+
+        val v1 = service.buildGpuView(machineNameEng)
+        assertEquals("agent", v1.source)
+
+        agentUp = false
+        val v2 = service.buildGpuView(machineNameEng)
+        assertEquals("last-known-good", v2.source)
+        assertEquals(1, v2.gpuCount)
+    }
+
+    @Test
+    fun `agent down with over-age cache returns none instead of stale snapshot`() {
+        // TTL = -1 强制每次都重新拉取；max-stale = -1 令回退窗口必然关闭
+        ReflectionTestUtils.setField(service, "cacheTtlSeconds", -1L)
+        ReflectionTestUtils.setField(service, "maxStaleSeconds", -1L)
+
+        val v1 = service.buildGpuView(machineNameEng)
+        assertEquals("agent", v1.source)
+
+        agentUp = false
+        val v2 = service.buildGpuView(machineNameEng)
+        // 缓存存在但已超过硬上限：不得回退到旧快照
+        assertEquals("none", v2.source)
+        assertTrue(v2.snapshot.isEmpty())
+        assertTrue(v2.error!!.contains("too old"))
+    }
+
+    @Test
+    fun `no apiUrl with over-age cache returns none`() {
+        ReflectionTestUtils.setField(service, "maxStaleSeconds", -1L)
+        val m = MachineConfig.machineList[0]
+        m.apiUrl = ""
+        try {
+            val v = service.buildGpuView(machineNameEng)
+            assertEquals("none", v.source)
+            assertEquals(0, v.gpuCount)
+        } finally {
+            m.apiUrl = "/gpu/test"
+        }
+    }
+
+    // ==================== 半挂 agent 不得被当成成功 ====================
+
+    @Test
+    fun `only gpu_count succeeding is not treated as a successful pull`() {
+        // gpu_count 通、其余全挂：旧实现会判 anySuccess=true，
+        // 输出一组 hasData=false 的空卡并标 source=agent / stale=false
+        ReflectionTestUtils.setField(service, "cacheTtlSeconds", -1L)
+
+        Mockito.`when`(agentClient.getGpuUsageInfo(Mockito.anyString(), Mockito.anyInt()))
+            .thenReturn(null)
+        Mockito.`when`(agentClient.getGpuTaskInfo(Mockito.anyString(), Mockito.anyInt()))
+            .thenReturn(null)
+        Mockito.`when`(agentClient.getDiskUsage(Mockito.anyString())).thenReturn(null)
+        Mockito.`when`(agentClient.getSystemInfo(Mockito.anyString())).thenReturn(null)
+
+        val v = service.buildGpuView(machineNameEng)
+        assertEquals("none", v.source)
+        assertTrue(v.snapshot.isEmpty())
+    }
+
+    @Test
+    fun `system info alone counts as a successful pull`() {
+        ReflectionTestUtils.setField(service, "cacheTtlSeconds", -1L)
+
+        Mockito.`when`(agentClient.getGpuUsageInfo(Mockito.anyString(), Mockito.anyInt()))
+            .thenReturn(null)
+        Mockito.`when`(agentClient.getGpuTaskInfo(Mockito.anyString(), Mockito.anyInt()))
+            .thenReturn(null)
+        Mockito.`when`(agentClient.getDiskUsage(Mockito.anyString())).thenReturn(null)
+        Mockito.`when`(agentClient.getSystemInfo(Mockito.anyString()))
+            .thenReturn(AgentSystemInfo(memoryPhysicTotalMb = 2048, memoryPhysicUsedMb = 512))
+
+        val d = service.buildDiskView(machineNameEng)
+        assertEquals("agent", d.source)
+        assertNotNull(d.system)
+        assertEquals(2048L, d.system!!.memoryPhysicTotalMb)
+    }
+
+    // ==================== gpuCount 放大防护 ====================
+
+    @Test
+    fun `implausible gpu count from agent is clamped`() {
+        ReflectionTestUtils.setField(service, "maxGpuCount", 4)
+        Mockito.`when`(agentClient.getGpuCount(Mockito.anyString()))
+            .thenReturn(AgentGpuCount(result = 8000))
+
+        val v = service.buildGpuView(machineNameEng)
+        // 被截断到 4，因此只会为 4 张卡发起拉取
+        assertEquals(4, v.gpuCount)
+        assertEquals(4, v.snapshot.size)
+        Mockito.verify(agentClient, Mockito.times(4))
+            .getGpuUsageInfo(Mockito.anyString(), Mockito.anyInt())
+    }
+
+    // ==================== single-flight ====================
+
+    @Test
+    fun `concurrent misses on same machine collapse into a single pull`() {
+        // 保持默认 TTL=5s（生产值），并让拉取变慢，使 8 个线程真正重叠。
+        // 场景：一次拉取耗时超过 TTL 时，原本每个请求都会各自全量拉一遍；
+        // 引入 per-key 锁 + 双检后，后来者拿到锁时缓存已新鲜，直接命中。
+        Mockito.`when`(agentClient.getGpuCount(Mockito.anyString())).thenAnswer {
+            Thread.sleep(80)
+            AgentGpuCount(result = 1)
+        }
+
+        val threads = (1..8).map { Thread { service.buildGpuView(machineNameEng) } }
+        val start = System.nanoTime()
+        threads.forEach { it.start() }
+        threads.forEach { it.join() }
+        val elapsedMs = (System.nanoTime() - start) / 1_000_000
+
+        Mockito.verify(agentClient, Mockito.times(1)).getGpuCount(Mockito.anyString())
+        // 若没有单飞，8 次串行拉取至少需要 8×80ms
+        assertTrue(elapsedMs < 8 * 80, "8 个并发请求耗时 ${elapsedMs}ms，疑似未合并为单次拉取")
+    }
+
+    @Test
+    fun `cached snapshot timestamp reflects pull completion not start`() {
+        val v1 = service.buildGpuView(machineNameEng)
+        assertEquals("agent", v1.source)
+        // pulledAt 取的是拉取完成时刻，因此必然不早于调用开始的那一刻
+        assertTrue(
+            v1.snapshotTime >= DateTimeUtils.getCurrentTimestamp() - 5,
+            "pulledAt 应为拉取完成时刻，实际=${v1.snapshotTime}"
+        )
+        assertTrue(v1.freshness >= 0)
     }
 }

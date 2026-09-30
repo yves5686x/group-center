@@ -73,6 +73,14 @@ class NviNotifyAgentClient {
     private fun joinUrl(baseUrl: String, path: String): String {
         var base = baseUrl.trim()
         if (!base.startsWith("http://") && !base.startsWith("https://")) {
+            // agentBaseUrl 未配置时会拼出 "/gpu/3090/gpu_count" 这种无 scheme 的地址，
+            // OkHttp 会抛 IllegalArgumentException 并在 getJson 里被吞成 null，
+            // 表现为「agent 不可达」——实际只是少一个环境变量，排查方向会被带偏。
+            // 这里直接抛出，让错误信息指向真正的根因。
+            check(agentBaseUrl.isNotBlank()) {
+                "REALTIME_AGENT_BASE_URL 未配置，但机器 ${baseUrl.trim()} 使用的是相对 apiUrl；" +
+                    "请设置该环境变量，或把 apiUrl 改成完整的 http(s) 绝对地址"
+            }
             base = agentBaseUrl.trim().trimEnd('/') + "/" + base.trimStart('/')
         }
         base = base.trimEnd('/')

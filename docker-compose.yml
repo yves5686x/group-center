@@ -29,6 +29,10 @@ services:
       SPRING_DATASOURCE_HOST: db:3306
       SPRING_DATASOURCE_USERNAME: root
       SPRING_DATASOURCE_PASSWORD: 123456
+      # 实时聚合层：机器 apiUrl 为相对路径时用它补全为绝对地址。
+      # 不设置会让 /web/open/realtime/** 全部返回 source=none。
+      # 若所有机器的 apiUrl 本身已是完整 http(s) 地址，则无需此项。
+      REALTIME_AGENT_BASE_URL: ${REALTIME_AGENT_BASE_URL:-}
 
   # Here should be the same as SPRING_DATASOURCE_HOST
   db:
