@@ -78,6 +78,8 @@ realtime:
   # 全局并发拉取上限：同时最多拉取几台机器。超出则快速失败并回退缓存，
   # 不排队——排队等于继续占住工作线程，正是要避免的。
   max-concurrent-pulls: 4
+  # 拉取失败后的冷却（秒）：这段时间内不再重试该机器，直接回退缓存。
+  pull-failure-cooldown-seconds: 30
   # agent 反向代理 origin：机器 apiUrl 为相对路径（如 /gpu/3090）时必填，
   # 后端拼接为绝对地址后再 pull；可用环境变量 REALTIME_AGENT_BASE_URL 覆盖。
   # 若 apiUrl 本身已是 http(s) 绝对地址，则忽略此项。

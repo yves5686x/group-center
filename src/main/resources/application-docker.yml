@@ -59,6 +59,8 @@ realtime:
   max-gpu-count: 32
   pull-timeout-seconds: 15
   max-concurrent-pulls: 4
+  # 拉取失败后的冷却（秒）：这段时间内不再重试该机器，直接回退缓存。
+  pull-failure-cooldown-seconds: 30
   agent-base-url: ${REALTIME_AGENT_BASE_URL:}
 
 # GPU 任务公开查询端点（/web/open/gpu-tasks/**）

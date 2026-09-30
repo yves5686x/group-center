@@ -359,4 +359,61 @@ class RealtimeSnapshotServiceTest {
         val gate = ReflectionTestUtils.getField(service, "pullGate") as java.util.concurrent.Semaphore
         assertEquals(4, gate.availablePermits(), "超时的拉取也必须归还名额，否则闸门会永久卡死")
     }
+
+    /**
+     * 本地压测发现：闸门原先放在 per-machine 锁【内】，并发请求会先在锁上排队，
+     * 永远走不到闸门——闸门 0 次拒绝，而 N 个请求被串行成 N 次完整拉取。
+     * 这条用例锁住「失败后不得反复重试」。
+     */
+    @Test
+    fun `failure cooldown stops repeated retries from a dead agent`() {
+        ReflectionTestUtils.setField(service, "cacheTtlSeconds", -1L)
+        ReflectionTestUtils.setField(service, "pullFailureCooldownSeconds", 30L)
+        agentUp = false
+
+        // 第一次：真的去拉一次，失败并记录时间戳
+        assertEquals("none", service.buildGpuView(machineNameEng).source)
+        val callsAfterFirst = Mockito.mockingDetails(agentClient).invocations.size
+
+        // 冷却期内的后续请求都不应再触发拉取
+        repeat(5) { assertEquals("none", service.buildGpuView(machineNameEng).source) }
+        assertEquals(
+            callsAfterFirst, Mockito.mockingDetails(agentClient).invocations.size,
+            "冷却期内不应再发起任何 agent 调用"
+        )
+    }
+
+    @Test
+    fun `cooldown expires and lets the next request retry`() {
+        ReflectionTestUtils.setField(service, "cacheTtlSeconds", -1L)
+        ReflectionTestUtils.setField(service, "pullFailureCooldownSeconds", 30L)
+        agentUp = false
+
+        service.buildGpuView(machineNameEng)
+
+        // 把失败时间戳往前挪，模拟冷却已过
+        val failures = ReflectionTestUtils.getField(service, "lastPullFailures")
+            as java.util.concurrent.ConcurrentHashMap<String, Long>
+        assertTrue(failures.containsKey(machineNameEng), "拉取失败应记录时间戳")
+        failures[machineNameEng] = failures[machineNameEng]!! - 60
+
+        service.buildGpuView(machineNameEng)
+        Mockito.verify(agentClient, Mockito.times(2)).getGpuCount(Mockito.anyString())
+    }
+
+    @Test
+    fun `successful pull clears the failure record`() {
+        ReflectionTestUtils.setField(service, "cacheTtlSeconds", -1L)
+        ReflectionTestUtils.setField(service, "pullFailureCooldownSeconds", 0L)
+        agentUp = false
+        service.buildGpuView(machineNameEng)
+
+        val failures = ReflectionTestUtils.getField(service, "lastPullFailures")
+            as java.util.concurrent.ConcurrentHashMap<String, Long>
+        assertTrue(failures.containsKey(machineNameEng))
+
+        agentUp = true
+        assertEquals("agent", service.buildGpuView(machineNameEng).source)
+        assertFalse(failures.containsKey(machineNameEng), "拉取成功后应清除失败记录")
+    }
 }

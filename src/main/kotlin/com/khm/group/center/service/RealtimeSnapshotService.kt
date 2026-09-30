@@ -112,7 +112,16 @@ class RealtimeSnapshotService {
 
     // serverNameEng -> 拉取锁。仅用于把同一台机器的并发 miss 合并成一次拉取，
     // 键只能来自 MachineConfig.machineList（启动期一次性赋值），因此不会无界增长。
-    private val pullLocks = ConcurrentHashMap<String, Any>()
+    private val pullLocks = ConcurrentHashMap<String, java.util.concurrent.locks.ReentrantLock>()
+
+    /**
+     * 失败冷却（秒）：某台机器拉取失败后，在这段时间内不再重试，直接回退缓存。（权威来源：application.yml）
+     */
+    @Value("\${realtime.pull-failure-cooldown-seconds}")
+    private var pullFailureCooldownSeconds: Long = 30
+
+    /** serverNameEng -> 最近一次拉取失败的时间戳，用于失败冷却判定。 */
+    private val lastPullFailures = ConcurrentHashMap<String, Long>()
 
     /** 全局拉取闸门：限制同时进行的拉取数，上限由 maxConcurrentPulls 控制。 */
     private val pullGate = Semaphore(DEFAULT_MAX_CONCURRENT_PULLS)
@@ -233,36 +242,62 @@ class RealtimeSnapshotService {
             return PullOutcome(machine, cache[key]!!, "cache", null)
         }
 
-        // 单飞：同一台机器的并发 miss 合并成一次拉取，避免把 agent 打成放大器
-        val lock = pullLocks.computeIfAbsent(key) { Any() }
-        synchronized(lock) {
-            // 双检：等锁期间可能已被其它线程刷新
-            val cached = cache[key]
-            if (isFresh(cached)) {
-                return PullOutcome(machine, cached!!, "cache", null)
+        val cached = cache[key]
+
+        // 失败冷却：拉取失败不写缓存，因此若无冷却，每个后续请求都会重跑一遍完整拉取。
+        // agent 挂掉时这就是放大器：N 个并发看板请求 = N 次全量拉取，全部占着 Tomcat 线程。
+        // 单飞锁只在成功时有意义（它依赖「等锁期间别人已把结果写进缓存」），
+        // 失败路径上缓存始终为空，锁只会把并发请求串行化——正是要避免的排队。
+        val lastFailure = lastPullFailures[key]
+        if (lastFailure != null &&
+            DateTimeUtils.getCurrentTimestamp() - lastFailure < pullFailureCooldownSeconds
+        ) {
+            return fallbackOutcome(machine, cached, "agent pull recently failed, serving cache without retrying")
+        }
+
+        // 闸门必须在 per-machine 锁【之外】：放在锁内的话，并发请求会先在锁上排队，
+        // 永远走不到闸门，闸门形同虚设，线程照样被占住。
+        if (!pullGate.tryAcquire()) {
+            logger.warn("Realtime pull gate is full (max={}), skipping pull: {}", maxConcurrentPulls, key)
+            return fallbackOutcome(machine, cached, "too many concurrent realtime pulls, skipped this round")
+        }
+
+        try {
+            val lock = pullLocks.computeIfAbsent(key) { java.util.concurrent.locks.ReentrantLock() }
+            // 必须 tryLock 而非 synchronized：单飞锁在 agent 健康时只需等几百毫秒（无害），
+            // 但 agent 挂掉时锁会持有整整一个拉取预算，后续请求全堵在监视器上——
+            // 那正是要避免的占住工作线程。拿不到锁就直接回退，让在途那次去填缓存。
+            val acquired = (lock as java.util.concurrent.locks.ReentrantLock)
+                .tryLock(PULL_LOCK_WAIT_MILLIS, java.util.concurrent.TimeUnit.MILLISECONDS)
+            if (!acquired) {
+                logger.warn("Realtime pull already in progress for {}, skipping this request", key)
+                return fallbackOutcome(machine, cached, "a pull for this machine is already in progress")
             }
 
-            // 全局闸门：拿不到名额就不排队，直接回退到缓存。
-            // 排队会继续占住 Tomcat 线程，正是这里要避免的情况。
-            if (!pullGate.tryAcquire()) {
-                logger.warn("Realtime pull gate is full (max={}), skipping pull: {}", maxConcurrentPulls, key)
-                return fallbackOutcome(machine, cached, "too many concurrent realtime pulls, skipped this round")
-            }
-
-            val fresh = try {
-                withPullTimeout { pullMachine(machine) }
-            } finally {
-                pullGate.release()
-            }
-            if (fresh != null) {
-                // 并发写回时只接受更新的快照，避免慢请求用旧数据覆盖快请求的结果
-                val winner = cache.merge(key, fresh) { old, new ->
-                    if (new.pulledAt >= old.pulledAt) new else old
+            try {
+                // 双检：等锁期间可能已被其它线程刷新
+                val latest = cache[key]
+                if (isFresh(latest)) {
+                    return PullOutcome(machine, latest!!, "cache", null)
                 }
-                return PullOutcome(machine, winner, "agent", null)
-            }
 
-            return fallbackOutcome(machine, cached, "agent pull failed, serving stale cache")
+                val fresh = withPullTimeout { pullMachine(machine) }
+                if (fresh != null) {
+                    lastPullFailures.remove(key)
+                    // 并发写回时只接受更新的快照，避免慢请求用旧数据覆盖快请求的结果
+                    val winner = cache.merge(key, fresh) { old, new ->
+                        if (new.pulledAt >= old.pulledAt) new else old
+                    }
+                    return PullOutcome(machine, winner, "agent", null)
+                }
+
+                lastPullFailures[key] = DateTimeUtils.getCurrentTimestamp()
+                return fallbackOutcome(machine, latest, "agent pull failed, serving stale cache")
+            } finally {
+                (lock as java.util.concurrent.locks.ReentrantLock).unlock()
+            }
+        } finally {
+            pullGate.release()
         }
     }
 
@@ -481,5 +516,8 @@ class RealtimeSnapshotService {
     private companion object {
         /** 闸门默认容量。真正的取值来自 realtime.max-concurrent-pulls，见 initPullGate()。 */
         const val DEFAULT_MAX_CONCURRENT_PULLS = 4
+
+        /** 单飞锁最多等待的毫秒数：agent 健康时拉取仅需几百毫秒，等一下是划算的。 */
+        const val PULL_LOCK_WAIT_MILLIS = 300L
     }
 }

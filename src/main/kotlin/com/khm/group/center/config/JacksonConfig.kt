@@ -1,43 +1,49 @@
 package com.khm.group.center.config
 
+import com.fasterxml.jackson.databind.DeserializationFeature
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.registerKotlinModule
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
+import org.springframework.http.converter.json.MappingJackson2HttpMessageConverter
 
 /**
  * Jackson全局ObjectMapper配置
- * 
- * 说明：
- * 1. Spring Boot 4.x 不再默认将ObjectMapper注册为全局Bean。
- *    如果你需要在业务类（如Service等）通过@Autowired注入ObjectMapper，
- *    必须在配置类中手动声明。
- * 2. 本配置类会注册一个全局唯一的ObjectMapper实例，
- *    推荐如需自定义特性等，也统一在这里集中定制。
- * 3. (注释)该Bean通过Spring提供的Jackson2ObjectMapperBuilder构建，
- *    可复用Spring Boot的Jackson模块与定制链路，避免业务层与HTTP序列化配置割裂。
  *
- * 参考：
- * https://docs.spring.io/spring-boot/docs/current/reference/html/application-properties.html#application-properties.json
- * 官方说明：如有业务需要请自行注册ObjectMapper Bean。
+ * 说明：
+ * 1. Spring Boot 4.x 不再自动注册 ObjectMapper Bean，
+ *    也不再注册 Jackson2ObjectMapperBuilder Bean，HTTP 消息转换器在缺省情况下
+ *    会自建一个不带 Kotlin 模块的 ObjectMapper，导致 Kotlin 数据类的默认值全部失效。
+ * 2. 这不是理论问题：此前 POST /web/open/gpu-tasks/query 因「非空参数为 null」
+ *    恒定 400（Pagination.page / pageSize、QueryFilter.logic 等默认值不生效），
+ *    整个端点无法反序列化任何请求体。
+ * 3. 因此这里显式声明带 Kotlin 模块的 ObjectMapper，并把它装进
+ *    [MappingJackson2HttpMessageConverter] 供 HTTP 层使用。
+ *    只声明 ObjectMapper Bean 是不够的——那只影响注入，不影响请求反序列化。
  */
 @Configuration
 class JacksonConfig {
 
     /**
-     * 注册全局唯一ObjectMapper Bean，使@Autowired或@Inject可用。
-     *
-     * 可在此配置自定义属性、模块等。
+     * 供业务层注入的 ObjectMapper。
      */
     @Bean
     fun objectMapper(): ObjectMapper {
         return ObjectMapper()
-            .registerKotlinModule() // 支持Kotlin数据类/空安全
-        // .enable(...) // 可以自定义序列化特性，如需特殊配置请补充
+            .registerKotlinModule()
+            // 与 Spring Boot 既往的 HTTP 行为保持一致：忽略未知字段，
+            // 否则前端多传一个字段就会 400
+            .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false)
     }
-//    @Bean
-//    fun objectMapper(builder: Jackson2ObjectMapperBuilder): ObjectMapper {
-//        // 通过Spring的builder构建，继承自动配置与已注册customizer
-//        return builder.build()
-//    }
+
+    /**
+     * HTTP 消息转换器，显式绑定上面的 ObjectMapper。
+     *
+     * 少了这个 Bean，Spring MVC 会用自己默认构建的 ObjectMapper，
+     * 数据类默认值依旧失效，POST 请求继续 400。
+     */
+    @Bean
+    fun jacksonHttpMessageConverter(objectMapper: ObjectMapper): MappingJackson2HttpMessageConverter {
+        return MappingJackson2HttpMessageConverter(objectMapper)
+    }
 }
