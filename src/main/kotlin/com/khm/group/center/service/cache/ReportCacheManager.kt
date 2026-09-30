@@ -33,6 +33,18 @@ import java.util.concurrent.TimeUnit
 @Component
 class ReportCacheManager {
     
+    private companion object {
+        /** 历史数据永不过期 */
+        val NEVER_EXPIRE = Long.MAX_VALUE
+        
+        /**
+         * 当日/当周/当月/当年报告的缓存有效期（毫秒）。
+         * 这类报告不落盘、只存在内存里，若不设过期时间则当天算出的快照会全天常驻，
+         * 看板上的用量数字不再变化，因此给一个短 TTL，保证最多十分钟重新统计一次。
+         */
+        val CURRENT_PERIOD_REPORT_EXPIRY = TimeUnit.MINUTES.toMillis(10)
+    }
+    
     // 内存缓存
     private val memoryCache = ConcurrentHashMap<String, CacheEntry<Any>>()
     
@@ -49,8 +61,8 @@ class ReportCacheManager {
         // 昨日报告 - 内存+磁盘缓存，24小时过期
         "yesterday_report" to TimeUnit.HOURS.toMillis(24),
         
-        // 日报 - 历史数据永不过期，但当日报告只有内存缓存
-        "daily_report" to Long.MAX_VALUE,
+        // 日报 - 历史数据永不过期，但当日报告只有内存缓存（当日/历史由 getExpiryTime 区分）
+        "daily_report" to NEVER_EXPIRE,
         
         // 周报 - 历史数据永不过期，但当周报告只有内存缓存
         "weekly_report" to Long.MAX_VALUE,
@@ -189,8 +201,9 @@ class ReportCacheManager {
             when {
                 cacheKey.startsWith("24hour_report") || cacheKey.startsWith("48hour_report") ||
                 cacheKey.startsWith("72hour_report") || cacheKey.startsWith("today_report") ||
-                cacheKey.startsWith("yesterday_report") || cacheKey.startsWith("weekly_report") ||
-                cacheKey.startsWith("monthly_report") || cacheKey.startsWith("yearly_report") -> {
+                cacheKey.startsWith("yesterday_report") || cacheKey.startsWith("daily_report") ||
+                cacheKey.startsWith("weekly_report") || cacheKey.startsWith("monthly_report") ||
+                cacheKey.startsWith("yearly_report") -> {
                     parseReportFromJson(jsonContent) as? T
                 }
                 cacheKey.startsWith("time_trend") -> {
@@ -240,13 +253,30 @@ class ReportCacheManager {
      * 获取缓存的过期时间
      */
     private fun getExpiryTime(cacheKey: String): Long {
+        // 周期报告需要区分「当前周期」和「历史」：CACHE_EXPIRY_CONFIG 只能按前缀匹配，
+        // 区分不了两者。历史上这些 key 一律配 NEVER_EXPIRE（历史数据确实不该过期），
+        // 但当天的日报/本周的周报/当月的月报/今年的年报同样匹配到该前缀，
+        // 于是当天算出的快照会全天常驻、看板数字不再变化。
+        // 这里复用 isCurrentPeriodReport 判定当前周期，给一个短 TTL 让它定期重算。
+        if (cacheKey.startsWith("daily_report") ||
+            cacheKey.startsWith("weekly_report") ||
+            cacheKey.startsWith("monthly_report") ||
+            cacheKey.startsWith("yearly_report")
+        ) {
+            return if (isCurrentPeriodReport(cacheKey)) {
+                CURRENT_PERIOD_REPORT_EXPIRY
+            } else {
+                NEVER_EXPIRE
+            }
+        }
+
         // 根据缓存键的前缀匹配过期时间
         for ((prefix, expiry) in CACHE_EXPIRY_CONFIG) {
             if (cacheKey.startsWith(prefix)) {
                 return expiry
             }
         }
-        
+
         // 默认过期时间：1小时
         return TimeUnit.HOURS.toMillis(1)
     }
@@ -428,6 +458,16 @@ class ReportCacheManager {
     }
     
     /**
+     * 解析缓存文件里的 LocalDateTime 字段。
+     * fastjson2 落盘时写的是 "yyyy-MM-dd HH:mm:ss.SSSSSS"（日期与时间之间是空格），
+     * 而 ISO_LOCAL_DATE_TIME 要求用 'T' 分隔，直接解析会抛 DateTimeParseException，
+     * 导致整个报告反序列化失败、磁盘缓存形同虚设，这里把空格换成 'T' 后再按 ISO 解析。
+     */
+    private fun parseCachedDateTime(text: String): LocalDateTime {
+        return LocalDateTime.parse(text.replace(' ', 'T'), DateTimeFormatter.ISO_LOCAL_DATE_TIME)
+    }
+    
+    /**
      * 从JSON字符串解析Report对象
      * 由于FastJSON无法正确反序列化Kotlin数据类中的LocalDate/LocalDateTime字段，需要手动解析
      */
@@ -440,10 +480,10 @@ class ReportCacheManager {
                 title = jsonObject.getString("title"),
                 periodStartDate = LocalDate.parse(jsonObject.getString("periodStartDate")),
                 periodEndDate = LocalDate.parse(jsonObject.getString("periodEndDate")),
-                startTime = LocalDateTime.parse(jsonObject.getString("startTime"), DateTimeFormatter.ISO_LOCAL_DATE_TIME),
-                endTime = LocalDateTime.parse(jsonObject.getString("endTime"), DateTimeFormatter.ISO_LOCAL_DATE_TIME),
-                actualTaskStartTime = LocalDateTime.parse(jsonObject.getString("actualTaskStartTime"), DateTimeFormatter.ISO_LOCAL_DATE_TIME),
-                actualTaskEndTime = LocalDateTime.parse(jsonObject.getString("actualTaskEndTime"), DateTimeFormatter.ISO_LOCAL_DATE_TIME),
+                startTime = parseCachedDateTime(jsonObject.getString("startTime")),
+                endTime = parseCachedDateTime(jsonObject.getString("endTime")),
+                actualTaskStartTime = parseCachedDateTime(jsonObject.getString("actualTaskStartTime")),
+                actualTaskEndTime = parseCachedDateTime(jsonObject.getString("actualTaskEndTime")),
                 totalTasks = jsonObject.getIntValue("totalTasks"),
                 totalRuntime = jsonObject.getIntValue("totalRuntime"),
                 activeUsers = jsonObject.getIntValue("activeUsers"),
@@ -451,7 +491,7 @@ class ReportCacheManager {
                 topGpus = parseGpuStatisticsList(jsonObject.getJSONArray("topGpus")),
                 topProjects = parseProjectStatisticsList(jsonObject.getJSONArray("topProjects")),
                 sleepAnalysis = parseSleepAnalysis(jsonObject.getJSONObject("sleepAnalysis")),
-                refreshTime = LocalDateTime.parse(jsonObject.getString("refreshTime"), DateTimeFormatter.ISO_LOCAL_DATE_TIME)
+                refreshTime = parseCachedDateTime(jsonObject.getString("refreshTime"))
             )
         } catch (e: Exception) {
             logger.error("Failed to parse Report from JSON", e)
@@ -532,7 +572,7 @@ class ReportCacheManager {
                 totalEarlyMorningTasks = jsonObject.getIntValue("totalEarlyMorningTasks"),
                 lateNightUsers = (jsonObject.getJSONArray("lateNightUsers")?.map { it.toString() }?.toSet() ?: emptySet()),
                 earlyMorningUsers = (jsonObject.getJSONArray("earlyMorningUsers")?.map { it.toString() }?.toSet() ?: emptySet()),
-                refreshTime = LocalDateTime.parse(jsonObject.getString("refreshTime"), DateTimeFormatter.ISO_LOCAL_DATE_TIME)
+                refreshTime = parseCachedDateTime(jsonObject.getString("refreshTime"))
             )
         } catch (e: Exception) {
             logger.warn("Failed to parse SleepAnalysis, returning null", e)
@@ -591,7 +631,7 @@ class ReportCacheManager {
             UserActivityTimeDistribution(
                 users = parseUserActivityTimeRangeList(jsonObject.getJSONArray("users")),
                 totalUsers = jsonObject.getIntValue("totalUsers"),
-                refreshTime = LocalDateTime.parse(jsonObject.getString("refreshTime"), DateTimeFormatter.ISO_LOCAL_DATE_TIME)
+                refreshTime = parseCachedDateTime(jsonObject.getString("refreshTime"))
             )
         } catch (e: Exception) {
             logger.error("Failed to parse UserActivityTimeDistribution from JSON", e)
@@ -610,10 +650,10 @@ class ReportCacheManager {
             UserActivityTimeRange(
                 userName = obj.getString("userName"),
                 earliestStartTime = if (obj.containsKey("earliestStartTime"))
-                    LocalDateTime.parse(obj.getString("earliestStartTime"), DateTimeFormatter.ISO_LOCAL_DATE_TIME)
+                    parseCachedDateTime(obj.getString("earliestStartTime"))
                     else null,
                 latestStartTime = if (obj.containsKey("latestStartTime"))
-                    LocalDateTime.parse(obj.getString("latestStartTime"), DateTimeFormatter.ISO_LOCAL_DATE_TIME)
+                    parseCachedDateTime(obj.getString("latestStartTime"))
                     else null,
                 activityTimeRange = obj.getString("activityTimeRange"),
                 totalTasks = obj.getIntValue("totalTasks"),
