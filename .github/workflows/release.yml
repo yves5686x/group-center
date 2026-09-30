@@ -1,0 +1,222 @@
+name: Release
+
+# 只在推送 v* tag 时触发，例如 v1.8.9。
+# 开发期不跑：后端每次构建要完整编译 Gradle，push-to-main 每推一次就编一次，太浪费。
+#
+# 与上游的 "Docker Publish CI (Stable)"（docker-publish.yml，push 到 main →
+# Docker Hub + 阿里云 ACR）并存且互不干扰。两条链路各用各的：
+#   - 本文件：tag 触发 → ghcr.io，零 secrets
+#   - docker-publish.yml：main 触发 → Docker Hub / 阿里云，需要 4 个 secret
+# 保留上游原版不动，同步 upstream 时不会产生冲突。
+on:
+  push:
+    tags:
+      - 'v*'
+
+# 权限最小化：只有推镜像和建 Release 需要 contents+packages 写权限
+permissions:
+  contents: write # 创建 GitHub Release
+  packages: write # 推送到 GHCR
+
+# 同一 tag 的重复触发（比如重跑）之间只保留最新一次
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  # ---------------------------------------------------------------------
+  # 第一阶段：在构建容器里编出 JAR
+  #
+  # 复用了仓库自带的 build_with_docker.py：它先用 Docker/Dockerfile-Build
+  # 起一个带 JDK 25 + Gradle 的镜像，再把仓库挂进去跑 build.py。
+  # 单独拆成一个 job，是因为 Dockerfile 里的 microdnf update/install 在
+  # QEMU 模拟下慢到不可接受，JAR 的构建只需一次，不应按架构重复。
+  # ---------------------------------------------------------------------
+  build-jar:
+    name: 构建 JAR
+    runs-on: ubuntu-latest
+    outputs:
+      semver: ${{ steps.version.outputs.semver }}
+    steps:
+      # 直接检出触发本次发布的那个 commit，不能用默认分支
+      - name: 检出代码
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: 设置 Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      # build.gradle.kts 的 version 是版本号的唯一权威来源；
+      # src/main/resources/settings/version.properties 由 writeVersionProperties
+      # 任务在每次 processResources 时重新生成，属于派生产物，不作为校验基准。
+      - name: 校验 tag 与 build.gradle.kts 版本一致
+        id: version
+        run: |
+          GRADLE_VERSION="$(sed -nE 's/^[[:space:]]*version[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' build.gradle.kts | head -n1)"
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          if [ -z "$GRADLE_VERSION" ]; then
+            echo "::error::未能从 build.gradle.kts 解析出版本号"
+            exit 1
+          fi
+          if [ "$TAG_VERSION" != "$GRADLE_VERSION" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} 与 build.gradle.kts 版本 ${GRADLE_VERSION} 不一致"
+            exit 1
+          fi
+          echo "版本一致: $GRADLE_VERSION"
+          echo "semver=$TAG_VERSION" >> "$GITHUB_OUTPUT"
+
+      # settings.gradle.kts 以阿里云镜像为主源、官方源为备用，但 Gradle 遇到
+      # 5xx 会直接禁用整个仓库并让解析失败（不会回落到下一源），所以阿里云
+      # 偶发 502 会整体打断构建。这是瞬时故障，重试即可。
+      #
+      # build_with_docker.py 会把 gradle-wrapper.properties 备份成 .bak 再改写
+      # 成官方源，失败时不会还原。若直接重试，.bak 会被覆盖成官方源，此后
+      # 无论成败都还原不回镜像地址。因此每次尝试前都要复位。
+      - name: 构建 JAR
+        run: |
+          set -uo pipefail
+          WRAPPER="gradle/wrapper/gradle-wrapper.properties"
+          cp "$WRAPPER" "$WRAPPER.orig"
+          for attempt in 1 2 3; do
+            echo "::group::构建 JAR（第 ${attempt}/3 次）"
+            cp "$WRAPPER.orig" "$WRAPPER"
+            rm -f "$WRAPPER.bak"
+            if python3 build_with_docker.py; then
+              echo "::endgroup::"
+              echo "构建成功"
+              cp "$WRAPPER.orig" "$WRAPPER"
+              rm -f "$WRAPPER.orig"
+              exit 0
+            fi
+            echo "::endgroup::"
+            echo "::warning::第 ${attempt} 次构建失败"
+            [ "$attempt" -lt 3 ] && sleep 20
+          done
+          echo "::error::连续 3 次构建 JAR 失败"
+          cp "$WRAPPER.orig" "$WRAPPER"
+          rm -f "$WRAPPER.orig"
+          exit 1
+
+      - name: 校验 JAR 产物
+        run: |
+          if [ ! -f group-center-docker.jar ]; then
+            echo "::error::未生成 group-center-docker.jar"
+            exit 1
+          fi
+          ls -lh group-center-docker.jar
+
+      - name: 上传 JAR 产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: group-center-jar
+          path: group-center-docker.jar
+          retention-days: 1
+
+  # ---------------------------------------------------------------------
+  # 第二阶段：组装运行时镜像并推送多架构 manifest
+  # ---------------------------------------------------------------------
+  publish:
+    name: 构建并发布多架构镜像
+    runs-on: ubuntu-latest
+    needs: build-jar
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: 下载 JAR 产物
+        uses: actions/download-artifact@v4
+        with:
+          name: group-center-jar
+          path: .
+
+      # 跨架构构建需要 QEMU 模拟非本机架构
+      - name: 设置 QEMU
+        uses: docker/setup-qemu-action@v4
+
+      - name: 设置 Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: 配置 BuildKit 缓存
+        uses: actions/cache@v6
+        with:
+          path: /tmp/.buildx-cache
+          key: ${{ runner.os }}-buildx-${{ github.ref_name }}
+          restore-keys: |
+            ${{ runner.os }}-buildx-
+
+      # GITHUB_TOKEN 由 Actions 自动注入，无需配置任何 secret
+      - name: 登录 GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # metadata-action 的 semver 会去掉 tag 的 v 前缀（v1.8.9 → 1.8.9），
+      # 镜像标签用的是去掉 v 的版本号，所以 Release 正文里必须引用同一个值。
+      - name: 推导镜像标签
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=raw,value=latest
+
+      - name: 构建并推送多架构镜像
+        id: build
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=local,src=/tmp/.buildx-cache
+          cache-to: type=local,dest=/tmp/.buildx-cache,mode=max
+
+      - name: 打印镜像摘要
+        run: echo "${{ steps.build.outputs.digest }}"
+
+      - name: 创建 GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          generate_release_notes: true
+          body: |
+            ## Docker
+
+            ```bash
+            docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.build-jar.outputs.semver }}
+            ```
+
+            本镜像为 `linux/amd64` 与 `linux/arm64` 双架构。
+
+            启动时需挂载 `Config` 目录（机器列表、Bot 配置等业务数据），
+            并通过环境变量指定数据库连接：
+
+            ```bash
+            docker run -d -p 15090:15090 -p 15092:15092 \
+              -v /path/to/Config:/usr/local/group-center/Config \
+              -v /path/to/Cache:/usr/local/group-center/Cache \
+              -v /path/to/Data/Log:/usr/local/group-center/logs \
+              -e SPRING_DATASOURCE_HOST=<db-host>:3306 \
+              -e SPRING_DATASOURCE_USERNAME=<user> \
+              -e SPRING_DATASOURCE_PASSWORD=<password> \
+              ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.build-jar.outputs.semver }}
+            ```
+
+            完整编排示例见仓库 `docker-compose.yml`。
