@@ -1,5 +1,12 @@
 # Group Center
 
+本次飞牛测试候选版本为 `1.8.10-rc.1`；测试镜像由 Release 工作流发布到 GHCR。
+测试版只创建独立版本标签，保留稳定镜像选择。
+
+Li-Node01 当前生产环境适配见 [部署说明](Doc/Li-Node01部署.md)。
+`Dockerfile.source` 与 `docker-compose.li-node01.yml` 可从当前源码构建，
+复用配置仓库的现有数据目录；普通 Compose 继续用于源码目录部署。
+
 ## Group Center 系列项目
 
 - [Group Center Backend(本项目)](https://github.com/a645162/group-center)

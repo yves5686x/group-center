@@ -1,0 +1,73 @@
+# 与现有生产项目同名，复用 core/db 服务及网络，避免创建第二套数据库。
+name: group-center
+services:
+  core:
+    image: ${GROUP_CENTER_IMAGE:-group-center:li-node01}
+    build:
+      context: .
+      dockerfile: Dockerfile.source
+    ports:
+      - "15090:15090"
+      - "15092:15092"
+    networks:
+      group-center-network:
+        aliases: [GROUP_CENTER_URL]
+    restart: always
+    depends_on:
+      db:
+        condition: service_healthy
+    links: [db]
+    volumes:
+      - type: bind
+        source: ${GROUP_CENTER_DEPLOY_DIR:-/opt/Software/li-group-config/Docker/Server/group-center}/Config
+        target: /usr/local/group-center/Config
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${GROUP_CENTER_DEPLOY_DIR:-/opt/Software/li-group-config/Docker/Server/group-center}/Cache
+        target: /usr/local/group-center/Cache
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${GROUP_CENTER_DEPLOY_DIR:-/opt/Software/li-group-config/Docker/Server/group-center}/Data/Log
+        target: /usr/local/group-center/logs
+        bind:
+          create_host_path: false
+    environment:
+      SPRING_DATASOURCE_HOST: db:3306
+      SPRING_DATASOURCE_USERNAME: root
+      SPRING_DATASOURCE_PASSWORD: ${GROUP_CENTER_DB_PASSWORD:-123456}
+      REALTIME_AGENT_BASE_URL: ${REALTIME_AGENT_BASE_URL:-http://g.329509.xyz}
+
+  db:
+    image: mysql:9
+    ports: ["15096:3306"]
+    networks:
+      group-center-network:
+        aliases: [MYSQL_URL]
+    restart: always
+    privileged: true
+    healthcheck:
+      test: ["CMD-SHELL", "MYSQL_PWD=\"$${MYSQL_ROOT_PASSWORD}\" mysqladmin ping -h127.0.0.1 -u root"]
+      interval: 5s
+      start_period: 5s
+      timeout: 2s
+      retries: 10
+    volumes:
+      - type: bind
+        source: ${GROUP_CENTER_DEPLOY_DIR:-/opt/Software/li-group-config/Docker/Server/group-center}/Data/Db/MySQL
+        target: /var/lib/mysql
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${GROUP_CENTER_DEPLOY_DIR:-/opt/Software/li-group-config/Docker/Server/group-center}/Data/Db/Backup
+        target: /usr/local/backup
+        bind:
+          create_host_path: false
+    environment:
+      MYSQL_DATABASE: group_center
+      MYSQL_ROOT_PASSWORD: ${GROUP_CENTER_DB_PASSWORD:-123456}
+
+networks:
+  group-center-network:
+    driver: bridge

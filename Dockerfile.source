@@ -1,0 +1,31 @@
+# syntax=docker/dockerfile:1
+# Li-Node01 源码构建入口；运行目录与现有生产镜像保持一致。
+FROM ghcr.io/graalvm/jdk-community:25 AS builder
+WORKDIR /build
+COPY gradlew build.gradle.kts settings.gradle.kts ./
+COPY gradle ./gradle
+COPY src ./src
+RUN chmod +x gradlew
+RUN --mount=type=cache,target=/root/.gradle ./gradlew bootJar --no-daemon \
+    && find build/libs -maxdepth 1 -name '*.jar' ! -name '*-plain.jar' -exec cp {} /build/app.jar \;
+
+FROM ghcr.io/graalvm/jdk-community:25
+RUN microdnf install -y git python3 python3-pip bash tzdata net-tools findutils iputils \
+    && microdnf clean all
+ENV BASE_PATH=/usr/local/group-center \
+    RUN_IN_DOCKER=True \
+    PACKAGE_MANAGER=microdnf \
+    TZ=Asia/Shanghai \
+    FILE_ENV_PATH=/usr/local/group-center/Config/Program/FileEnv.toml
+WORKDIR /usr/local/group-center
+RUN ln -snf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime \
+    && echo Asia/Shanghai > /etc/timezone
+COPY Scripts ./Scripts
+COPY --from=builder /build/app.jar ./group-center-docker.jar
+COPY src/main/resources/application-docker.yml ./application.yml
+COPY docker.start.sh ./docker.start.sh
+RUN sed -i 's/\r$//' ./*.sh ./Scripts/*.sh && chmod +x ./docker.start.sh
+EXPOSE 15090
+HEALTHCHECK --interval=10s --timeout=3s --start-period=30s --retries=1 \
+    CMD python3 -c 'import urllib.request; urllib.request.urlopen("http://127.0.0.1:15090/version", timeout=2).close()'
+ENTRYPOINT ["/usr/local/group-center/docker.start.sh"]

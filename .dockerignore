@@ -1,0 +1,13 @@
+.git
+.gradle
+.idea
+build
+Config
+Cache
+Data
+logs
+Debug
+.env*
+*.pem
+*.key
+__pycache__

@@ -32,7 +32,7 @@ services:
       # 实时聚合层：机器 apiUrl 为相对路径时用它补全为绝对地址。
       # 不设置会让 /web/open/realtime/** 全部返回 source=none。
       # 若所有机器的 apiUrl 本身已是完整 http(s) 地址，则无需此项。
-      REALTIME_AGENT_BASE_URL: ${REALTIME_AGENT_BASE_URL:-}
+      REALTIME_AGENT_BASE_URL: ${REALTIME_AGENT_BASE_URL:-http://g.329509.xyz}
 
   # Here should be the same as SPRING_DATASOURCE_HOST
   db:
