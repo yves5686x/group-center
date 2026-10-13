@@ -1,5 +1,7 @@
 package com.khm.group.center.datatype.realtime
 
+import com.fasterxml.jackson.annotation.JsonProperty
+
 /**
  * 实时聚合层对外数据模型。
  * 数据来源：后端主动 pull agent(nvi-notify) 的 REST 接口，带 TTL 内存缓存。
@@ -169,6 +171,9 @@ class RealtimeMachineBrief {
     var serverName: String = ""
     var agentOnline: Boolean = false
     var hasApiUrl: Boolean = false
+    // 固定公开 API 的字段名；Kotlin 模块会将裸 isGpu 属性序列化成 isGpu。
+    @get:JsonProperty("gpu")
+    @set:JsonProperty("gpu")
     var isGpu: Boolean = false
     var position: String = ""
     var snapshotTime: Long = 0

@@ -15,6 +15,7 @@ on:
 
 # 权限最小化：只有推镜像和建 Release 需要 contents+packages 写权限
 permissions:
+  actions: read # 对照上一测试版的实际打包产物验证 JSON 字段回归
   contents: write # 创建 GitHub Release
   packages: write # 推送到 GHCR
 
@@ -112,6 +113,42 @@ jobs:
             exit 1
           fi
           ls -lh group-center-docker.jar
+
+      - name: 设置 JSON 契约测试 JDK
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '25'
+
+      - name: 验证打包产物的 GPU 字段契约
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/group-center-json-contract
+          cd /tmp/group-center-json-contract
+          jar xf "$GITHUB_WORKSPACE/group-center-docker.jar"
+          java -cp 'BOOT-INF/classes:BOOT-INF/lib/*' \
+            "$GITHUB_WORKSPACE/deploy/tests/RealtimeMachineJsonContract.java"
+
+      - name: 下载上一测试版用于对照
+        id: previous-release
+        if: github.ref_name == 'v1.8.10-rc.2'
+        continue-on-error: true # 旧对照产物过期不影响新版自身的契约检查
+        uses: actions/download-artifact@v4
+        with:
+          name: group-center-jar
+          run-id: 38366883373
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: /tmp/group-center-rc1-jar
+
+      - name: 复现上一测试版的字段变化
+        if: github.ref_name == 'v1.8.10-rc.2' && steps.previous-release.outcome == 'success'
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/group-center-json-contract-rc1
+          cd /tmp/group-center-json-contract-rc1
+          jar xf /tmp/group-center-rc1-jar/group-center-docker.jar
+          java -cp 'BOOT-INF/classes:BOOT-INF/lib/*' \
+            "$GITHUB_WORKSPACE/deploy/tests/RealtimeMachineJsonContract.java" isGpu
 
       - name: 上传 JAR 产物
         uses: actions/upload-artifact@v4
