@@ -30,7 +30,7 @@ val fastjsonVersion = "2.0.62"
 
 group = "com.khm.group"
 // version = "1.5.5-SNAPSHOT"
-version = "1.8.10-rc.2"
+version = "1.8.10-rc.3"
 
 java {
     sourceCompatibility = JavaVersion.VERSION_25
@@ -75,6 +75,7 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.11.0")
 
     implementation("com.fasterxml.jackson.module:jackson-module-kotlin:2.22.0")
+    implementation("com.fasterxml.jackson.datatype:jackson-datatype-jsr310")
 
     ////////////////////////////////////////////////////////////////////////////////////////////
     // Spring Boot

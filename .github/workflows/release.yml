@@ -120,7 +120,7 @@ jobs:
           distribution: temurin
           java-version: '25'
 
-      - name: 验证打包产物的 GPU 字段契约
+      - name: 验证打包产物的 GPU 与统计日期契约
         run: |
           set -euo pipefail
           mkdir -p /tmp/group-center-json-contract
@@ -128,27 +128,29 @@ jobs:
           jar xf "$GITHUB_WORKSPACE/group-center-docker.jar"
           java -cp 'BOOT-INF/classes:BOOT-INF/lib/*' \
             "$GITHUB_WORKSPACE/deploy/tests/RealtimeMachineJsonContract.java"
+          java -cp 'BOOT-INF/classes:BOOT-INF/lib/*' \
+            "$GITHUB_WORKSPACE/deploy/tests/StatisticsJsonContract.java"
 
       - name: 下载上一测试版用于对照
         id: previous-release
-        if: github.ref_name == 'v1.8.10-rc.2'
+        if: github.ref_name == 'v1.8.10-rc.3'
         continue-on-error: true # 旧对照产物过期不影响新版自身的契约检查
         uses: actions/download-artifact@v4
         with:
           name: group-center-jar
-          run-id: 38366883373
+          run-id: 38370088312
           github-token: ${{ secrets.GITHUB_TOKEN }}
-          path: /tmp/group-center-rc1-jar
+          path: /tmp/group-center-rc2-jar
 
-      - name: 复现上一测试版的字段变化
-        if: github.ref_name == 'v1.8.10-rc.2' && steps.previous-release.outcome == 'success'
+      - name: 复现上一测试版的统计日期错误
+        if: github.ref_name == 'v1.8.10-rc.3' && steps.previous-release.outcome == 'success'
         run: |
           set -euo pipefail
-          mkdir -p /tmp/group-center-json-contract-rc1
-          cd /tmp/group-center-json-contract-rc1
-          jar xf /tmp/group-center-rc1-jar/group-center-docker.jar
+          mkdir -p /tmp/group-center-json-contract-rc2
+          cd /tmp/group-center-json-contract-rc2
+          jar xf /tmp/group-center-rc2-jar/group-center-docker.jar
           java -cp 'BOOT-INF/classes:BOOT-INF/lib/*' \
-            "$GITHUB_WORKSPACE/deploy/tests/RealtimeMachineJsonContract.java" isGpu
+            "$GITHUB_WORKSPACE/deploy/tests/StatisticsJsonContract.java" expect-unsupported-time
 
       - name: 上传 JAR 产物
         uses: actions/upload-artifact@v4

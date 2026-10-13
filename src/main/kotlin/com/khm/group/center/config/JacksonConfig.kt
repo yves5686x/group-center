@@ -2,6 +2,8 @@ package com.khm.group.center.config
 
 import com.fasterxml.jackson.databind.DeserializationFeature
 import com.fasterxml.jackson.databind.ObjectMapper
+import com.fasterxml.jackson.databind.SerializationFeature
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule
 import com.fasterxml.jackson.module.kotlin.registerKotlinModule
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
@@ -31,6 +33,9 @@ class JacksonConfig {
     fun objectMapper(): ObjectMapper {
         return ObjectMapper()
             .registerKotlinModule()
+            .registerModule(JavaTimeModule())
+            // 统计接口中的 LocalDate/LocalDateTime 使用前端可直接读取的 ISO 字符串。
+            .configure(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS, false)
             // 与 Spring Boot 既往的 HTTP 行为保持一致：忽略未知字段，
             // 否则前端多传一个字段就会 400
             .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false)
