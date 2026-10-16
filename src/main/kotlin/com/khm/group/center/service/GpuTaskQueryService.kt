@@ -3,6 +3,8 @@ package com.khm.group.center.service
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page
 import com.khm.group.center.datatype.query.*
+import com.khm.group.center.datatype.config.GroupUserConfig
+import com.khm.group.center.datatype.config.MachineConfig
 import com.khm.group.center.datatype.query.enums.SortOrder
 import com.khm.group.center.datatype.response.QueryFailureException
 import com.khm.group.center.db.mapper.client.GpuTaskInfoMapper
@@ -41,6 +43,22 @@ class GpuTaskQueryService {
 
     private val queryBuilder = GpuTaskQueryBuilder()
     private val statisticsCalculator = QueryStatisticsCalculator()
+
+    /** Read only distinct identifiers, never task bodies or a paginated sample. */
+    fun getQueryOptions(): Map<String, Any> {
+        fun distinct(column: String): List<String> = gpuTaskInfoMapper.selectObjs<Any>(
+            QueryWrapper<GpuTaskInfoModel>().select("DISTINCT $column")
+                .isNotNull(column).ne(column, "").orderByAsc(column)
+        ).mapNotNull { it?.toString()?.trim()?.takeIf(String::isNotEmpty) }
+
+        val users = (distinct("task_user") + GroupUserConfig.userList.map { it.name })
+            .filter(String::isNotBlank).distinct().sorted()
+        val serverIds = (distinct("server_name_eng") + MachineConfig.machineList.map { it.nameEng })
+            .filter(String::isNotBlank).distinct().sorted()
+        return mapOf("users" to users, "servers" to serverIds.map {
+            mapOf("serverNameEng" to it, "serverName" to it)
+        })
+    }
 
     /**
      * 执行GPU任务查询

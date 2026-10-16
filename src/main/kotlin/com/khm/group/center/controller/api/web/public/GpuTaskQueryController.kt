@@ -28,6 +28,13 @@ class GpuTaskQueryController {
     @Autowired
     private lateinit var gpuTaskQueryService: GpuTaskQueryService
 
+    @GetMapping("/options")
+    @Operation(summary = "Task query users and servers", description = "All configured and historical users/servers, independent of pagination or statistics period")
+    fun getQueryOptions(): ClientResponse = ClientResponse().apply {
+        result = gpuTaskQueryService.getQueryOptions()
+        isSucceed = true
+    }
+
     /**
      * 高级查询接口（POST方式，支持复杂查询）
      */
@@ -73,6 +80,7 @@ class GpuTaskQueryController {
         @Parameter(description = "Username for filtering tasks") @RequestParam(required = false) userName: String?,
         @Parameter(description = "Project name (supports fuzzy matching)") @RequestParam(required = false) projectName: String?,
         @Parameter(description = "Device name for filtering") @RequestParam(required = false) deviceName: String?,
+        @Parameter(description = "Exact server identifier, e.g. 4098a") @RequestParam(required = false) serverNameEng: String?,
         @Parameter(description = "Task type filter") @RequestParam(required = false) taskType: String?,
         @Parameter(description = "Filter by multi-GPU tasks (true/false)") @RequestParam(required = false) isMultiGpu: Boolean?,
         @Parameter(description = "Start time for time range filtering (ISO format)") @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) startTime: LocalDateTime?,
@@ -86,7 +94,10 @@ class GpuTaskQueryController {
         logger.info("Received GPU task simple query request")
 
         // 构建查询请求
-        val filters = buildFilters(userName, projectName, deviceName, taskType, isMultiGpu)
+        val filters = buildFilters(userName, projectName, deviceName, taskType, isMultiGpu).toMutableList()
+        if (!serverNameEng.isNullOrBlank()) {
+            filters.add(QueryFilter(QueryField.SERVER_NAME_ENG, QueryOperator.EQUALS, serverNameEng.trim()))
+        }
         val timeRange = buildTimeRange(startTime, endTime)
         val pagination = Pagination(page, pageSize, sortBy, sortOrder)
 
@@ -239,7 +250,7 @@ class GpuTaskQueryController {
 
         // 检查用户名参数，如果为空或trim后为空字符串则不添加条件
         if (!userName.isNullOrBlank()) {
-            filters.add(QueryFilter(QueryField.TASK_USER, QueryOperator.EQUALS, userName.trim()))
+            filters.add(QueryFilter(QueryField.TASK_USER, QueryOperator.LIKE, userName.trim()))
         }
 
         // 检查项目名称参数，如果为空或trim后为空字符串则不添加条件，使用模糊匹配

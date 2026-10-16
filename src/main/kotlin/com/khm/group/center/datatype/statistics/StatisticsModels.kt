@@ -62,7 +62,9 @@ data class UserStatistics(
     var totalRuntime: Int = 0,
     var averageRuntime: Double = 0.0,
     var favoriteGpu: String = "",
-    var favoriteProject: String = ""
+    var favoriteProject: String = "",
+    var favoriteServer: String = "",
+    var gpuModels: List<String> = emptyList()
 ) {
     val formattedAverageRuntime: Double get() = NumberFormat.formatDouble(averageRuntime)
 }

@@ -58,6 +58,19 @@ class StatisticsAnalyzer {
     fun analyzeUserStatistics(tasks: List<GpuTaskInfoModel>, periodStart: Long? = null, periodEnd: Long? = null): List<UserStatistics> {
         val filteredTasks = filterMultiGpuTasks(tasks)
         val userMap = mutableMapOf<String, UserStatistics>()
+        val gpuRuntime = mutableMapOf<String, MutableMap<String, Long>>()
+        val serverRuntime = mutableMapOf<String, MutableMap<String, Long>>()
+        val projectRuntime = mutableMapOf<String, MutableMap<String, Long>>()
+
+        fun accumulate(target: MutableMap<String, MutableMap<String, Long>>, user: String, name: String, runtime: Long) {
+            if (name.isBlank()) return
+            val totals = target.getOrPut(user) { mutableMapOf() }
+            totals[name] = (totals[name] ?: 0L) + runtime
+        }
+
+        fun favorite(totals: Map<String, Long>?): String = totals?.entries
+            ?.sortedWith(compareByDescending<Map.Entry<String, Long>> { it.value }.thenBy { it.key })
+            ?.firstOrNull()?.key ?: ""
 
         for (task in filteredTasks) {
             val userName = task.taskUser
@@ -84,20 +97,18 @@ class StatisticsAnalyzer {
                 user.totalTasks++
                 user.totalRuntime += actualRuntime.toInt()
 
-                // 更新最喜欢的GPU（基于实际运行时间）
-                if (user.favoriteGpu.isEmpty() || actualRuntime.toDouble() > user.totalRuntime.toDouble() / user.totalTasks) {
-                    user.favoriteGpu = task.taskGpuName
-                }
-
-                // 更新最喜欢的项目
-                if (user.favoriteProject.isEmpty() || task.projectName.isNotBlank()) {
-                    user.favoriteProject = task.projectName
-                }
+                accumulate(gpuRuntime, userName, task.taskGpuName, actualRuntime)
+                accumulate(serverRuntime, userName, task.serverNameEng.ifBlank { task.serverName }, actualRuntime)
+                accumulate(projectRuntime, userName, task.projectName, actualRuntime)
             }
         }
 
         // 计算平均运行时间
         userMap.values.forEach { user ->
+            user.favoriteGpu = favorite(gpuRuntime[user.userName])
+            user.favoriteServer = favorite(serverRuntime[user.userName])
+            user.favoriteProject = favorite(projectRuntime[user.userName])
+            user.gpuModels = gpuRuntime[user.userName]?.keys?.sorted() ?: emptyList()
             user.averageRuntime = if (user.totalTasks > 0) {
                 NumberFormat.formatAverage(user.totalRuntime.toDouble(), user.totalTasks)
             } else {
@@ -116,11 +127,12 @@ class StatisticsAnalyzer {
         val gpuMap = mutableMapOf<String, GpuStatistics>()
 
         for (task in filteredTasks) {
-            val gpuKey = "${task.taskGpuName}_${task.serverName}"
+            val server = task.serverNameEng.ifBlank { task.serverName }
+            val gpuKey = "${task.taskGpuName}_$server"
             val gpu = gpuMap.getOrPut(gpuKey) {
                 GpuStatistics(
                     gpuName = task.taskGpuName,
-                    serverName = task.serverName,
+                    serverName = server,
                     totalUsageCount = 0,
                     totalRuntime = 0,
                     averageUsagePercent = 0.0,
@@ -165,7 +177,7 @@ class StatisticsAnalyzer {
         val serverMap = mutableMapOf<String, ServerStatistics>()
 
         for (task in filteredTasks) {
-            val serverName = task.serverName
+            val serverName = task.serverNameEng.ifBlank { task.serverName }
             val server = serverMap.getOrPut(serverName) {
                 ServerStatistics(
                     serverName = serverName,

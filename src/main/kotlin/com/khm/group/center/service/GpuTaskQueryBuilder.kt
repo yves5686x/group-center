@@ -117,7 +117,7 @@ class GpuTaskQueryBuilder {
         fun fragment(condition: Condition): String {
             val column = condition.column
             return when (condition.operator) {
-                "LIKE" -> "$column LIKE ${placeholder(escapeLikeWildcards(condition.value.toString()))}"
+                "LIKE" -> "$column LIKE ${placeholder("%${escapeLikeWildcards(condition.value.toString())}%")}"
                 "BETWEEN" -> {
                     @Suppress("UNCHECKED_CAST")
                     val range = condition.value as Pair<Any, Any>

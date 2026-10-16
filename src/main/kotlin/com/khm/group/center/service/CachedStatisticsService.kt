@@ -34,7 +34,7 @@ class CachedStatisticsService {
      * 获取用户统计信息（带缓存）
      */
     fun getUserStatistics(timePeriod: TimePeriod): List<UserStatistics> {
-        val cacheKey = "user_stats_${timePeriod.name}"
+        val cacheKey = "user_stats_v2_${timePeriod.name}"
         
         // 尝试从缓存获取
         val cached: List<UserStatistics>? = reportCacheManager.getCachedData(cacheKey)
@@ -56,7 +56,7 @@ class CachedStatisticsService {
      * 获取GPU统计信息（带缓存）
      */
     fun getGpuStatistics(timePeriod: TimePeriod): List<GpuStatistics> {
-        val cacheKey = "gpu_stats_${timePeriod.name}"
+        val cacheKey = "gpu_stats_v2_${timePeriod.name}"
         
         // 尝试从缓存获取
         val cached: List<GpuStatistics>? = reportCacheManager.getCachedData(cacheKey)
@@ -78,7 +78,7 @@ class CachedStatisticsService {
      * 获取服务器统计信息（带缓存）
      */
     fun getServerStatistics(timePeriod: TimePeriod): List<ServerStatistics> {
-        val cacheKey = "server_stats_${timePeriod.name}"
+        val cacheKey = "server_stats_v2_${timePeriod.name}"
         
         // 尝试从缓存获取
         val cached: List<ServerStatistics>? = reportCacheManager.getCachedData(cacheKey)

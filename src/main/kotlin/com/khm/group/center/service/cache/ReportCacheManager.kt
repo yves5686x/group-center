@@ -513,7 +513,9 @@ class ReportCacheManager {
                 totalRuntime = obj.getIntValue("totalRuntime"),
                 averageRuntime = obj.getDoubleValue("averageRuntime"),
                 favoriteGpu = obj.getString("favoriteGpu"),
-                favoriteProject = obj.getString("favoriteProject")
+                favoriteProject = obj.getString("favoriteProject") ?: "",
+                favoriteServer = obj.getString("favoriteServer") ?: "",
+                gpuModels = obj.getList("gpuModels", String::class.java) ?: emptyList()
             )
         }
     }
@@ -684,7 +686,9 @@ class ReportCacheManager {
                             totalRuntime = obj.getIntValue("totalRuntime"),
                             averageRuntime = obj.getDoubleValue("averageRuntime"),
                             favoriteGpu = obj.getString("favoriteGpu"),
-                            favoriteProject = obj.getString("favoriteProject")
+                            favoriteProject = obj.getString("favoriteProject") ?: "",
+                            favoriteServer = obj.getString("favoriteServer") ?: "",
+                            gpuModels = obj.getList("gpuModels", String::class.java) ?: emptyList()
                         )
                     }
                 }
